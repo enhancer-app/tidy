@@ -40,12 +40,12 @@ export async function handleSetup(request: Request, env: Env, origin: string): P
     const guess = REPO.test(repo) ? repo : "";
     return page(
       "Set up tidy",
-      `<form method="get" action="/setup">
+      `<form class="stack" method="get" action="/setup">
 <input type="hidden" name="code" value="${escape(code)}">
-<p><label>Repository that runs tidy (this template copy)<br><input type="text" name="repo" placeholder="you/tidy" value="${escape(guess)}" required></label></p>
-<p><label>GitHub App name (must be unique on GitHub)<br><input type="text" name="name" value="${escape(guess ? `${guess.split("/")[0]}-tidy` : "")}" required maxlength="34"></label></p>
-<p><label>The repository belongs to <select name="owner_type"><option value="user">my personal account</option><option value="organization">an organization</option></select></label></p>
-<button>Continue</button></form>`,
+<label>Repository that runs tidy (this template copy)<input type="text" name="repo" placeholder="you/tidy" value="${escape(guess)}" required></label>
+<label>GitHub App name (must be unique on GitHub)<input type="text" name="name" value="${escape(guess ? `${guess.split("/")[0]}-tidy` : "")}" required maxlength="34"></label>
+<label>The repository belongs to<select name="owner_type"><option value="user">my personal account</option><option value="organization">an organization</option></select></label>
+<div><button class="primary">Continue</button></div></form>`,
     );
   }
 
@@ -62,7 +62,7 @@ You never download or copy it.</p>
 <ul><li>Repository permissions: contents, pull requests and issues (write), metadata (read). No workflows permission.</li>
 <li>Events: issues, issue comments, pull requests.</li></ul>
 <form method="post" action="${escape(action)}"><input type="hidden" name="manifest" value="${escape(JSON.stringify(manifest(origin, repo, name)))}">
-<button>Create GitHub App</button></form>`,
+<button class="primary">Create GitHub App</button></form>`,
   );
 }
 
