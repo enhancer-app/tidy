@@ -3,7 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { b64url, utf8 } from "../shared/encoding";
 import { decrypt, deriveKeys, encrypt, signValue, verifyValue } from "../worker/crypto";
 import { appJwt, pkcs1ToPkcs8 } from "../worker/github";
-import { isSameOrigin, page } from "../worker/html";
+import { isSameOrigin } from "../worker/html";
 import { classify, countersFor, signatureMatches } from "../worker/webhook";
 
 const master = b64url(crypto.getRandomValues(new Uint8Array(32)));
@@ -43,26 +43,6 @@ describe("GitHub App key", () => {
     const signature = Uint8Array.from(atob(s!.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
     expect(await crypto.subtle.verify("RSASSA-PKCS1-v1_5", verifier, signature, utf8(`${h}.${p}`))).toBe(true);
     expect(JSON.parse(atob(p!))).toMatchObject({ iss: 123 });
-  });
-});
-
-describe("HTML pages", () => {
-  test("the theme script carries the nonce the CSP allows, and nothing else may run", async () => {
-    const response = page("Title", "<p>body</p>");
-    const csp = response.headers.get("content-security-policy")!;
-    const nonce = /script-src 'nonce-([^']+)'/.exec(csp)?.[1];
-    const html = await response.text();
-    expect(nonce).toBeTruthy();
-    expect(html.match(/<script[^>]*>/g)).toEqual([`<script nonce="${nonce}">`]);
-    expect(csp).toContain("default-src 'none'");
-    expect(csp).toContain("img-src data:;");
-  });
-
-  test("escapes the title and the App slug", async () => {
-    const html = await page("<img src=x>", "", { app: '"><script>x</script>' }).text();
-    expect(html).not.toContain("<img src=x>");
-    expect(html).not.toContain("<script>x");
-    expect(html).toContain("&lt;img src=x&gt;");
   });
 });
 

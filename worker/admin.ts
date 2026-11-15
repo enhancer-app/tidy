@@ -50,8 +50,7 @@ export async function handleAdmin(request: Request, env: Env, origin: string): P
     return page(
       "tidy admin",
       `<p>Sign in with a GitHub account that has admin access to <code>${escape(instance.repo.fullName)}</code>.</p>
-<p><a class="button primary" href="/admin/login">Sign in with GitHub</a></p>`,
-      { app: instance.app.slug },
+<p><a href="/admin/login">Sign in with GitHub</a></p>`,
     );
   }
   return dashboard(env, instance, current);
@@ -116,7 +115,7 @@ async function callback(request: Request, env: Env, instance: Instance, origin: 
   const sid = b64url(crypto.getRandomValues(new Uint8Array(16)));
   const signed = await signValue(keys, "session", { uid: user.id, login: user.login, sid }, 3600);
   // A Strict cookie set during a cross-site redirect is not sent on the next hop, so continue from our own page.
-  const response = page("Signed in", `<meta http-equiv="refresh" content="0;url=/admin"><p><a class="button primary" href="/admin">Continue</a></p>`, {
+  const response = page("Signed in", `<meta http-equiv="refresh" content="0;url=/admin"><p><a href="/admin">Continue</a></p>`, {
     headers: { "set-cookie": hostCookie(SESSION, signed, 3600, "Strict") },
   });
   response.headers.append("set-cookie", hostCookie(OAUTH, "", 0, "Lax"));
@@ -145,22 +144,21 @@ async function dashboard(env: Env, instance: Instance, current: Session): Promis
       ([name, key]) => `<tr><td><code>${escape(name)}</code></td><td>…${escape(key.value.slice(-4))}</td>
 <td class="muted">${escape(key.updated.slice(0, 16).replace("T", " "))} by @${escape(key.by)}</td>
 <td><form method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}">
-<input type="hidden" name="name" value="${escape(name)}"><button class="small danger" name="op" value="delete">Remove</button></form></td></tr>`,
+<input type="hidden" name="name" value="${escape(name)}"><button name="op" value="delete">Remove</button></form></td></tr>`,
     )
     .join("");
   return page(
     "tidy admin",
-    `<div class="bar"><p>Signed in as @${escape(current.login)}. App: <a href="https://github.com/apps/${escape(instance.app.slug)}">${escape(instance.app.slug)}</a>
+    `<p>Signed in as @${escape(current.login)}. App: <a href="https://github.com/apps/${escape(instance.app.slug)}">${escape(instance.app.slug)}</a>
 · <a href="https://github.com/apps/${escape(instance.app.slug)}/installations/new">Add repositories</a></p>
-<form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${escape(csrf)}"><button class="small">Sign out</button></form></div>
-<section class="box"><h2>Model keys</h2><p class="muted">Keys can be replaced or removed, never shown. Every change opens an issue in
+<div class="box"><h2>Model keys</h2><p class="muted">Keys can be replaced or removed, never shown. Every change opens an issue in
 <code>${escape(instance.repo.fullName)}</code>. Models are chosen in <code>tidy.yml</code>, not here.</p>
-<div class="table"><table><tr><th>Variable</th><th>Key</th><th>Changed</th><th></th></tr>${rows || '<tr><td colspan="4" class="muted">No keys yet.</td></tr>'}</table></div>
-<form class="stack" method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}">
-<label>Environment variable<input type="text" name="name" value="OPENCODE_API_KEY" pattern="[A-Z][A-Z0-9_]{1,63}" required></label>
-<label>Key<input type="password" name="value" autocomplete="off" required maxlength="4096"></label>
-<div><button class="primary" name="op" value="set">Save key</button></div></form></section>`,
-    { app: instance.app.slug },
+<table><tr><th>Variable</th><th>Key</th><th>Changed</th><th></th></tr>${rows || '<tr><td colspan="4" class="muted">No keys yet.</td></tr>'}</table>
+<form method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}">
+<p><label>Environment variable<br><input type="text" name="name" value="OPENCODE_API_KEY" pattern="[A-Z][A-Z0-9_]{1,63}" required></label></p>
+<p><label>Key<br><input type="password" name="value" autocomplete="off" required maxlength="4096"></label></p>
+<button name="op" value="set">Save key</button></form></div>
+<form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${escape(csrf)}"><button>Sign out</button></form>`,
   );
 }
 
