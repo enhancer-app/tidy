@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { b64url, utf8 } from "../shared/encoding";
 import { decrypt, deriveKeys, encrypt, signValue, verifyValue } from "../worker/crypto";
+import { keyName } from "../worker/admin";
 import { appJwt, pkcs1ToPkcs8 } from "../worker/github";
 import { isSameOrigin, page } from "../worker/html";
 import { classify, countersFor, signatureMatches } from "../worker/webhook";
@@ -63,6 +64,21 @@ describe("HTML pages", () => {
     expect(html).not.toContain("<img src=x>");
     expect(html).not.toContain("<script>x");
     expect(html).toContain("&lt;img src=x&gt;");
+  });
+});
+
+describe("model key names", () => {
+  test("a provider maps to the variable OpenCode reads, and Other takes a valid custom name", () => {
+    expect(keyName("anthropic", "IGNORED_NAME")).toBe("ANTHROPIC_API_KEY");
+    expect(keyName("other", "MY_API_KEY")).toBe("MY_API_KEY");
+    expect(keyName(null, "OPENCODE_API_KEY")).toBe("OPENCODE_API_KEY");
+  });
+
+  test("rejects unknown providers and malformed names", () => {
+    expect(keyName("toString", null)).toBeNull();
+    expect(keyName("nope", "MY_API_KEY")).toBeNull();
+    expect(keyName("other", "lower_case")).toBeNull();
+    expect(keyName("other", "")).toBeNull();
   });
 });
 

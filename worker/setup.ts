@@ -102,7 +102,7 @@ export async function handleSetupCallback(request: Request, env: Env): Promise<R
     `<ol><li><a href="https://github.com/apps/${escape(app.slug)}/installations/new">Install the App</a>.
 Choose <b>All repositories</b> so new repositories work without another step, or pick repositories one by one.
 Include <code>${escape(state.repo)}</code>: tidy dispatches its workflows there.</li>
-<li>Add your model key in <a href="/admin">/admin</a>, for example <code>OPENCODE_API_KEY</code> for OpenCode Go.</li>
+<li>Add your model provider's key in <a href="/admin">/admin</a>, for example OpenCode Go.</li>
 <li>Recommended: run <code>bun run protect -- --apply</code> in your tidy checkout, so GitHub itself stops the App from merging.</li></ol>`,
   );
 }

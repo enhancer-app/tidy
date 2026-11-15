@@ -34,7 +34,7 @@ triage:
 ```
 
 Model names use OpenCode's `provider/model` form, with an optional `#variant`. Save the provider's key
-in `/admin` under the variable OpenCode reads, such as `OPENCODE_API_KEY` for OpenCode Go.
+in `/admin`: pick the provider, or pick **Other** and enter the variable OpenCode reads for it.
 
 ## Routes
 

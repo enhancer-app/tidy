@@ -9,6 +9,25 @@ const SESSION = "__Host-tidy-session";
 const OAUTH = "__Host-tidy-oauth";
 const KEY_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
 
+// Variable names come from models.dev, which OpenCode reads; Google also accepts GOOGLE_API_KEY and GEMINI_API_KEY.
+export const PROVIDERS: Record<string, { label: string; env: string }> = {
+  opencode: { label: "OpenCode Zen / Go", env: "OPENCODE_API_KEY" },
+  anthropic: { label: "Anthropic", env: "ANTHROPIC_API_KEY" },
+  openai: { label: "OpenAI", env: "OPENAI_API_KEY" },
+  openrouter: { label: "OpenRouter", env: "OPENROUTER_API_KEY" },
+  google: { label: "Google", env: "GOOGLE_GENERATIVE_AI_API_KEY" },
+  deepseek: { label: "DeepSeek", env: "DEEPSEEK_API_KEY" },
+  groq: { label: "Groq", env: "GROQ_API_KEY" },
+  xai: { label: "xAI", env: "XAI_API_KEY" },
+  mistral: { label: "Mistral", env: "MISTRAL_API_KEY" },
+};
+
+/** The variable a key is stored under: the provider's, or a custom name when the provider is "other" or absent. */
+export function keyName(provider: string | null, name: string | null): string | null {
+  if (provider && provider !== "other") return Object.hasOwn(PROVIDERS, provider) ? PROVIDERS[provider]!.env : null;
+  return name && KEY_NAME.test(name) ? name : null;
+}
+
 interface Session {
   uid: number;
   login: string;
@@ -140,13 +159,18 @@ export async function isAdmin(env: Env, instance: Instance, login: string): Prom
 
 async function dashboard(env: Env, instance: Instance, current: Session): Promise<Response> {
   const csrf = await mac(await deriveKeys(env.TIDY_MASTER_KEY), "csrf", current.sid);
+  const labels = new Map(Object.values(PROVIDERS).map((p) => [p.env, p.label]));
   const rows = Object.entries(instance.keys)
     .map(
-      ([name, key]) => `<tr><td><code>${escape(name)}</code></td><td>…${escape(key.value.slice(-4))}</td>
+      ([name, key]) => `<tr><td><div>${escape(labels.get(name) ?? "Other")}</div><code class="var">${escape(name)}</code></td>
+<td>…${escape(key.value.slice(-4))}</td>
 <td class="muted">${escape(key.updated.slice(0, 16).replace("T", " "))} by @${escape(key.by)}</td>
 <td><form method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}">
 <input type="hidden" name="name" value="${escape(name)}"><button class="small danger" name="op" value="delete">Remove</button></form></td></tr>`,
     )
+    .join("");
+  const options = Object.entries(PROVIDERS)
+    .map(([id, p]) => `<option value="${id}">${escape(p.label)}${p.env in instance.keys ? " · saved" : ""}</option>`)
     .join("");
   return page(
     "tidy admin",
@@ -155,9 +179,10 @@ async function dashboard(env: Env, instance: Instance, current: Session): Promis
 <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${escape(csrf)}"><button class="small">Sign out</button></form></div>
 <section class="box"><h2>Model keys</h2><p class="muted">Keys can be replaced or removed, never shown. Every change opens an issue in
 <code>${escape(instance.repo.fullName)}</code>. Models are chosen in <code>tidy.yml</code>, not here.</p>
-<div class="table"><table><tr><th>Variable</th><th>Key</th><th>Changed</th><th></th></tr>${rows || '<tr><td colspan="4" class="muted">No keys yet.</td></tr>'}</table></div>
+<div class="table"><table><tr><th>Provider</th><th>Key</th><th>Changed</th><th></th></tr>${rows || '<tr><td colspan="4" class="muted">No keys yet.</td></tr>'}</table></div>
 <form class="stack" method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}">
-<label>Environment variable<input type="text" name="name" value="OPENCODE_API_KEY" pattern="[A-Z][A-Z0-9_]{1,63}" required></label>
+<label>Provider<select name="provider">${options}<option value="other">Other (custom variable)</option></select></label>
+<label class="custom">Environment variable OpenCode reads<input type="text" name="name" placeholder="MY_PROVIDER_API_KEY" pattern="[A-Z][A-Z0-9_]{1,63}"></label>
 <label>Key<input type="password" name="value" autocomplete="off" required maxlength="4096"></label>
 <div><button class="primary" name="op" value="set">Save key</button></div></form></section>`,
     { app: instance.app.slug },
@@ -165,9 +190,9 @@ async function dashboard(env: Env, instance: Instance, current: Session): Promis
 }
 
 async function updateKey(form: FormData, env: Env, instance: Instance, current: Session, origin: string): Promise<Response> {
-  const name = String(form.get("name") ?? "");
   const op = form.get("op");
-  if (!KEY_NAME.test(name)) return page("Invalid name", "<p>Use an environment variable name such as OPENCODE_API_KEY.</p>", { status: 400 });
+  const name = keyName(op === "set" ? (form.get("provider") as string | null) : null, form.get("name") as string | null);
+  if (!name) return page("Invalid name", "<p>Use an environment variable name such as OPENCODE_API_KEY.</p>", { status: 400 });
   if (op === "set") {
     const value = String(form.get("value") ?? "").trim();
     if (!value || value.length > 4096 || /\s/.test(value)) return page("Invalid key", "<p>The key is empty or malformed.</p>", { status: 400 });

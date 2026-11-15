@@ -40,6 +40,8 @@ transition:background .15s,border-color .15s,color .15s}
 button:hover,.button:hover{background:var(--hover);text-decoration:none}
 .primary{color:var(--primary-fg);background:var(--primary);border-color:var(--primary)}
 .primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+.var{display:inline-block;margin-top:.2rem;font-size:.75rem;color:var(--muted)}
+.stack:has(option[value=other]:not(:checked)) .custom{display:none}
 .small{height:32px;padding:0 .75rem;font-size:.8125rem}.danger:hover{color:var(--danger);border-color:var(--danger);background:var(--bg)}
 :focus-visible{outline:2px solid var(--link);outline-offset:2px}
 .table{overflow-x:auto;margin:1.25rem 0 0;border:1px solid var(--line);border-radius:6px}

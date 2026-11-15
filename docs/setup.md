@@ -14,8 +14,9 @@ You need a GitHub account, a free Cloudflare account and a model key, for exampl
 4. Open the setup link and click **Create GitHub App**. GitHub creates the App and gives its key straight
    to the Worker; you never download it. Then install the App, ideally on **All repositories**, and make
    sure your tidy repository is included.
-5. Open `https://<your-worker>/admin`, sign in with GitHub and save your model key, for example as
-   `OPENCODE_API_KEY`. The variable name is the one OpenCode reads for that provider.
+5. Open `https://<your-worker>/admin`, sign in with GitHub, pick your model provider, for example
+   OpenCode Zen / Go, and save its key. You can save keys for several providers. For a provider not in
+   the list, pick **Other** and enter the variable OpenCode reads for it.
 
 Every key change in `/admin` opens an issue in your tidy repository, so a change you did not make does
 not go unnoticed. You can close those issues.
