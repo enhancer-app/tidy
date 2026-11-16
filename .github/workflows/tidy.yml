@@ -1,0 +1,93 @@
+name: tidy
+run-name: tidy ${{ github.event.client_payload.kind }} ${{ github.event.client_payload.repo }}#${{ github.event.client_payload.number }}
+
+# Started only by the tidy Worker. Credentials come from the Worker per job, so this repository has no secrets.
+on:
+  repository_dispatch:
+    types: [tidy]
+
+permissions: {}
+
+# A push during a review cancels it, so a burst of commits gets one review of the latest one.
+concurrency:
+  group: tidy-${{ github.event.client_payload.repo }}-${{ github.event.client_payload.number }}-${{ github.event.client_payload.kind }}
+  cancel-in-progress: ${{ github.event.client_payload.kind == 'review' }}
+
+jobs:
+  gate:
+    uses: ./.github/workflows/gate.yml
+    permissions:
+      contents: read
+      id-token: write
+
+  # Tells the thread tidy is on it, with a link to this run, while the agent works.
+  announce:
+    needs: gate
+    if: needs.gate.outputs.task == 'triage' || needs.gate.outputs.task == 'review'
+    uses: ./.github/workflows/publish.yml
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    with:
+      announce: ${{ needs.gate.outputs.task }}
+
+  # Triage, then the fix or reply its route picks, in one job so the model key is fetched once.
+  issue:
+    needs: gate
+    if: needs.gate.outputs.task == 'triage'
+    uses: ./.github/workflows/agent.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      task: issue
+      model: ${{ needs.gate.outputs.triage-model }}
+      shell: ${{ needs.gate.outputs.trusted == 'true' }}
+
+  # Picks the arguments for the repository's review extras, such as the steps of a demo recording.
+  plan:
+    needs: gate
+    if: needs.gate.outputs.task == 'review' && needs.gate.outputs.extras == 'true'
+    uses: ./.github/workflows/agent.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      task: plan
+      model: ${{ needs.gate.outputs.review-model }}
+
+  checks:
+    needs: [gate, plan]
+    if: always() && needs.gate.outputs.task == 'review' && needs.gate.outputs.checks == 'true'
+    uses: ./.github/workflows/checks.yml
+    permissions:
+      contents: read
+
+  review:
+    needs: [gate, checks]
+    # Runs even if checks failed or timed out; a new push cancels the whole run instead.
+    if: always() && !cancelled() && needs.gate.outputs.task == 'review'
+    uses: ./.github/workflows/agent.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      task: review
+      model: ${{ needs.gate.outputs.review-model }}
+
+  publish:
+    needs: [gate, announce, issue, review]
+    # Always runs, so the 👀 reaction is resolved even when tidy skips the event or fails.
+    if: always()
+    uses: ./.github/workflows/publish.yml
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    with:
+      source-run: ${{ needs.gate.outputs.source-run }}
+      patch-sha: ${{ needs.gate.outputs.patch-sha }}
+      approver: ${{ needs.gate.outputs.approver }}
+      proposal: ${{ needs.gate.outputs.proposal }}
+      failed: ${{ contains(needs.*.result, 'failure') }}

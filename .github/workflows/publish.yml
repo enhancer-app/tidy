@@ -1,0 +1,79 @@
+name: tidy publish
+
+# The only file the Worker gives a write token to. It runs tidy's code on artifacts and nothing else.
+on:
+  workflow_call:
+    inputs:
+      # Set by `@tidy publish`: the earlier run whose patch a maintainer approved.
+      source-run:
+        type: string
+        default: ""
+      patch-sha:
+        type: string
+        default: ""
+      approver:
+        type: string
+        default: ""
+      proposal:
+        type: string
+        default: ""
+      failed:
+        type: boolean
+        default: false
+      # The gate's task ("triage" or "review"): only post the status note with a link to the run.
+      announce:
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tidy
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      # Missing when the gate skipped the event; publish.ts then only resolves the reaction.
+      - if: ${{ inputs.announce == '' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: context
+          path: ${{ runner.temp }}
+          run-id: ${{ inputs.source-run || github.run_id }}
+          github-token: ${{ github.token }}
+      # Skipped tasks leave no result; publish.ts then has nothing to do.
+      - if: ${{ inputs.announce == '' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          pattern: result-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/result
+          run-id: ${{ inputs.source-run || github.run_id }}
+          github-token: ${{ github.token }}
+      # Files written by review extras, such as demo GIFs, to attach to the review.
+      - if: ${{ inputs.announce == '' }}
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: checks
+          path: ${{ runner.temp }}/checks
+      - run: if [ -f "$RUNNER_TEMP/context.tar" ]; then tar -xf "$RUNNER_TEMP/context.tar" -C "$RUNNER_TEMP"; fi
+      - run: bun tidy/scripts/publish.ts
+        env:
+          FAILED: ${{ inputs.failed }}
+          ANNOUNCE: ${{ inputs.announce }}
+          APPROVER: ${{ inputs.approver }}
+          PATCH_SHA: ${{ inputs.patch-sha }}
+          PROPOSAL: ${{ inputs.proposal }}
