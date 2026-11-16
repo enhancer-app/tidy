@@ -1,3 +1,5 @@
+import { parse } from "yaml";
+
 /** Run limits the Worker enforces before it starts a workflow. Set them under `limits:` in tidy.yml. */
 export interface RunLimits {
   /** Workflow runs per UTC day across the instance, for everyone. */
@@ -17,20 +19,39 @@ export const DEFAULT_LIMITS: RunLimits = {
   outsider_pushes_per_pr_per_day: 6,
 };
 
+/** Who and what the Worker serves. */
+export interface Access {
+  /** Accounts whose repositories tidy works in; empty means only the App's owner. */
+  allowed_owners: string[];
+  /** Whether tidy works in private repositories when its own repository, and so its logs, are public. */
+  private_repos: boolean;
+}
+
+export interface WorkerSettings {
+  limits: RunLimits;
+  access: Access;
+}
+
 /**
- * Reads the numbers under a top-level `limits:` key. The Worker has no YAML parser, so this covers only
- * the flat `key: number` form tidy.yml uses; anything it cannot read keeps its default.
+ * Reads the settings the Worker needs from tidy.yml. The Worker runs on workerd, where Bun.YAML does not
+ * exist, so this uses the `yaml` package. A value of the wrong type keeps its default.
  */
-export function parseLimits(yaml: string): RunLimits {
+export function parseWorkerSettings(text: string): WorkerSettings {
+  const doc = (parse(text) ?? {}) as { limits?: Record<string, unknown>; allowed_owners?: unknown; private_repos?: unknown };
   const limits = { ...DEFAULT_LIMITS };
-  let inside = false;
-  for (const line of yaml.split(/\r?\n/)) {
-    if (/^\S/.test(line)) {
-      inside = /^limits:\s*(#.*)?$/.test(line);
-      continue;
-    }
-    const match = inside && line.match(/^\s+([a-z_]+):\s*(\d+)\s*(#.*)?$/);
-    if (match && match[1]! in limits) limits[match[1] as keyof RunLimits] = Number(match[2]);
+  for (const key of Object.keys(limits) as (keyof RunLimits)[]) {
+    const value = doc.limits?.[key];
+    if (Number.isInteger(value) && (value as number) >= 0) limits[key] = value as number;
   }
-  return limits;
+  const owners = Array.isArray(doc.allowed_owners) ? doc.allowed_owners : [];
+  return {
+    limits,
+    access: {
+      allowed_owners: owners
+        .filter((o): o is string => typeof o === "string")
+        .map((o) => o.toLowerCase())
+        .filter((o) => /^[a-z0-9-]{1,39}$/.test(o)),
+      private_repos: doc.private_repos === true,
+    },
+  };
 }

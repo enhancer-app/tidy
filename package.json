@@ -18,5 +18,8 @@
     "@types/bun": "1.4.4",
     "typescript": "7.0.2",
     "wrangler": "4.160.1"
+  },
+  "dependencies": {
+    "yaml": "2.9.1"
   }
 }

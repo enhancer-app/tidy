@@ -1,21 +1,28 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_LIMITS, parseLimits } from "../shared/limits";
+import { DEFAULT_LIMITS, parseWorkerSettings } from "../shared/limits";
 import { leaksKey, providerNotice, providerProblem } from "../scripts/lib/provider";
 import { sandboxConfig } from "../scripts/lib/opencode";
 
 describe("limits in tidy.yml", () => {
-  test("the Worker's small parser reads the shipped tidy.yml the same way a YAML parser does", () => {
+  test("the Worker reads the shipped tidy.yml the same way the Actions scripts do", () => {
     const text = readFileSync(join(import.meta.dir, "..", "tidy.yml"), "utf8");
-    const full = (Bun.YAML.parse(text) as { limits: Record<string, number> }).limits;
-    const parsed = parseLimits(text);
-    for (const key of Object.keys(DEFAULT_LIMITS) as (keyof typeof DEFAULT_LIMITS)[]) expect(parsed[key]).toBe(full[key]!);
+    const full = Bun.YAML.parse(text) as { limits: Record<string, number>; allowed_owners?: string[] };
+    const { limits, access } = parseWorkerSettings(text);
+    for (const key of Object.keys(DEFAULT_LIMITS) as (keyof typeof DEFAULT_LIMITS)[]) expect(limits[key]).toBe(full.limits[key]!);
+    expect(access.allowed_owners).toEqual((full.allowed_owners ?? []).map((o) => o.toLowerCase()));
   });
 
-  test("missing or unreadable values keep their defaults", () => {
-    expect(parseLimits("limits:\n  runs_per_day: lots\nother:\n  runs_per_repo_per_day: 1\n")).toEqual(DEFAULT_LIMITS);
-    expect(parseLimits("limits:  # caps\n  runs_per_day: 50  # fewer\n").runs_per_day).toBe(50);
+  test("values of the wrong type keep their defaults", () => {
+    const { limits, access } = parseWorkerSettings("limits:\n  runs_per_day: lots\n  runs_per_repo_per_day: -1\nprivate_repos: yes please\n");
+    expect(limits).toEqual(DEFAULT_LIMITS);
+    expect(access).toEqual({ allowed_owners: [], private_repos: false });
+  });
+
+  test("allowed_owners accepts both list styles and drops names GitHub cannot have", () => {
+    expect(parseWorkerSettings("allowed_owners: [igorovh, Enhancer-App]\n").access.allowed_owners).toEqual(["igorovh", "enhancer-app"]);
+    expect(parseWorkerSettings("allowed_owners:\n  - igorovh\n  - not/valid\n").access.allowed_owners).toEqual(["igorovh"]);
   });
 });
 

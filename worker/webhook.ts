@@ -1,5 +1,5 @@
 import { b64url, timingSafeEqual, utf8 } from "../shared/encoding";
-import { DEFAULT_LIMITS, parseLimits, type RunLimits } from "../shared/limits";
+import { type Access, DEFAULT_LIMITS, parseWorkerSettings, type RunLimits, type WorkerSettings } from "../shared/limits";
 import type { AppRecord, Dispatch, Env, Instance } from "./env";
 import { stateOf } from "./env";
 import { github, installationToken } from "./github";
@@ -18,7 +18,7 @@ export async function signatureMatches(secret: string, body: string, header: str
 interface Payload {
   action?: string;
   installation?: { id: number };
-  repository?: { id: number; full_name: string; owner?: { login: string } };
+  repository?: { id: number; full_name: string; private?: boolean; owner?: { login: string } };
   sender?: { login: string; type: string };
   issue?: { number: number; pull_request?: unknown; state: string; author_association?: string };
   comment?: { id: number; body: string; user: { type: string }; author_association?: string };
@@ -70,6 +70,19 @@ export function classify(event: string, payload: Payload, botLogin: string, tidy
   return null;
 }
 
+/**
+ * Why tidy must not work in this repository, if it must not. The App can be public so organizations can
+ * install it, so anyone could install it; only listed owners get runs. Runs log the code they read, so a
+ * public tidy repository skips private repositories unless private_repos allows them.
+ */
+export function refusal(payload: Payload, access: Access, appOwner: string, tidyIsPublic: boolean): string | null {
+  const owner = payload.repository?.owner?.login.toLowerCase() ?? "";
+  const allowed = access.allowed_owners.length ? access.allowed_owners : [appOwner.toLowerCase()];
+  if (!allowed.includes(owner)) return "owner not in allowed_owners";
+  if (payload.repository?.private && tidyIsPublic && !access.private_repos) return "private repository and public tidy logs";
+  return null;
+}
+
 /** Counters an event must fit under; maintainers only meet the instance-wide safety caps. */
 export function countersFor(match: Match, limits: RunLimits, day: string): { key: string; limit: number }[] {
   const counters = [
@@ -110,23 +123,27 @@ async function tidyRepoToken(app: AppRecord, repo: { installationId: number; id:
 }
 
 // Edits to tidy.yml take effect within this time, without a redeploy.
-const LIMITS_CACHE_MS = 5 * 60_000;
-let limitsCache: { at: number; limits: RunLimits } | undefined;
+const SETTINGS_CACHE_MS = 5 * 60_000;
+type Settings = WorkerSettings & { tidyIsPublic: boolean };
+let settingsCache: { at: number; settings: Settings } | undefined;
 
-async function loadLimits(instance: Instance, repo: Required<Instance["repo"]>): Promise<RunLimits> {
-  if (limitsCache && Date.now() - limitsCache.at < LIMITS_CACHE_MS) return limitsCache.limits;
-  let limits = limitsCache?.limits ?? DEFAULT_LIMITS;
+async function loadSettings(instance: Instance, repo: Required<Instance["repo"]>): Promise<Settings> {
+  if (settingsCache && Date.now() - settingsCache.at < SETTINGS_CACHE_MS) return settingsCache.settings;
+  // Until tidy.yml is read, assume the safe side: default limits, only the App owner, public logs.
+  let settings: Settings = settingsCache?.settings ?? { limits: DEFAULT_LIMITS, access: { allowed_owners: [], private_repos: false }, tidyIsPublic: true };
   try {
-    const yaml = await github<string>(`/repos/${repo.fullName}/contents/tidy.yml?ref=${encodeURIComponent(repo.defaultBranch)}`, {
-      token: await tidyRepoToken(instance.app, repo),
+    const token = await tidyRepoToken(instance.app, repo);
+    const text = await github<string>(`/repos/${repo.fullName}/contents/tidy.yml?ref=${encodeURIComponent(repo.defaultBranch)}`, {
+      token,
       accept: "application/vnd.github.raw",
     });
-    limits = parseLimits(yaml);
+    const info = await github<{ private: boolean }>(`/repos/${repo.fullName}`, { token });
+    settings = { ...parseWorkerSettings(text), tidyIsPublic: !info.private };
   } catch (error) {
-    console.error("Could not read limits from tidy.yml; keeping the last known ones", error);
+    console.error("Could not read tidy.yml; keeping the last known settings", error);
   }
-  limitsCache = { at: Date.now(), limits };
-  return limits;
+  settingsCache = { at: Date.now(), settings };
+  return settings;
 }
 
 export async function handleWebhook(request: Request, env: Env, origin: string): Promise<Response> {
@@ -142,10 +159,12 @@ export async function handleWebhook(request: Request, env: Env, origin: string):
   if (!match) return new Response("ignored", { status: 202 });
 
   const repo = await resolveRepo(env, instance);
-  const limits = await loadLimits(instance, repo);
+  const settings = await loadSettings(instance, repo);
+  const refused = refusal(payload, settings.access, instance.app.ownerLogin, settings.tidyIsPublic);
+  if (refused) return new Response(`skipped: ${refused}`, { status: 202 });
   const state = stateOf(env);
   const delivery = request.headers.get("x-github-delivery") ?? crypto.randomUUID();
-  const admitted = await state.admit(delivery, countersFor(match, limits, new Date().toISOString().slice(0, 10)), 2 * 86_400_000);
+  const admitted = await state.admit(delivery, countersFor(match, settings.limits, new Date().toISOString().slice(0, 10)), 2 * 86_400_000);
   if (!admitted.ok) return new Response(`skipped: ${admitted.reason}`, { status: admitted.reason === "duplicate" ? 202 : 429 });
 
   const dispatchId = b64url(crypto.getRandomValues(new Uint8Array(18)));

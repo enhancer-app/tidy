@@ -91,6 +91,21 @@ pushing (see [How it works](how-it-works.md#fixes-from-outside-issues)). A push 
 branches, such as `branches: [main]`, does not count. List workflows here that use secrets only on
 branches tidy never pushes, such as one limited to `renovate/` branches.
 
+## Accounts and private repositories
+
+```yaml
+allowed_owners: [igorovh, enhancer-app]
+private_repos: false
+```
+
+`allowed_owners` lists the accounts and organizations whose repositories tidy works in. Leave it out to
+allow only the App's owner. The Worker checks it before anything else, so if someone else installs a public
+App, their events start nothing.
+
+Runs log the code they read in your tidy repository's Actions. While that repository is public, tidy
+skips private repositories. Set `private_repos: true` only after you make your tidy repository private.
+Both settings live only in `tidy.yml` and, like the limits, apply within 5 minutes.
+
 ## Limits
 
 ```yaml
@@ -106,8 +121,7 @@ limits:
 
 The Worker checks the first four before it starts a run, so a refused event costs nothing but the
 webhook. It reads them from `tidy.yml` on your tidy repository's default branch and picks up changes
-within 5 minutes, without a redeploy. Keep them as plain numbers: the Worker reads this block without a
-full YAML parser, and a value it cannot read keeps its default.
+within 5 minutes, without a redeploy. A value that is not a whole number keeps its default.
 
 Maintainers are the repository's owner, members and collaborators, as GitHub reports them, and tidy
 itself. Their events only count towards `runs_per_day` and `runs_per_repo_per_day`. Commands such as

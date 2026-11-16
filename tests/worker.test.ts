@@ -5,7 +5,7 @@ import { decrypt, deriveKeys, encrypt, signValue, verifyValue } from "../worker/
 import { keyName } from "../worker/admin";
 import { appJwt, pkcs1ToPkcs8 } from "../worker/github";
 import { isSameOrigin, page } from "../worker/html";
-import { classify, countersFor, signatureMatches } from "../worker/webhook";
+import { classify, countersFor, refusal, signatureMatches } from "../worker/webhook";
 
 const master = b64url(crypto.getRandomValues(new Uint8Array(32)));
 
@@ -131,6 +131,22 @@ describe("webhooks", () => {
       classify("pull_request", { ...base, action: "labeled", sender: { login: "renovate[bot]", type: "Bot" }, label: { name }, pull_request: { number: 7, draft: false } }, bot, "alice/tidy");
     expect(labeled("tidy:review")).toMatchObject({ kind: "review", number: 7, requested: true, trusted: true });
     expect(labeled("dependencies")).toBeNull();
+  });
+
+  test("only allowed owners get runs, so strangers who install a public App get nothing", () => {
+    const repo = (owner: string, isPrivate = false) => ({ repository: { id: 1, full_name: `${owner}/app`, private: isPrivate, owner: { login: owner } } });
+    const access = { allowed_owners: [], private_repos: false };
+    expect(refusal(repo("igorovh"), access, "igorovh", true)).toBeNull();
+    expect(refusal(repo("stranger"), access, "igorovh", true)).toContain("allowed_owners");
+    const org = { ...access, allowed_owners: ["igorovh", "enhancer-app"] };
+    expect(refusal(repo("Enhancer-App"), org, "igorovh", true)).toBeNull();
+  });
+
+  test("private repositories are skipped while tidy's own logs are public", () => {
+    const repo = { repository: { id: 1, full_name: "igorovh/secret", private: true, owner: { login: "igorovh" } } };
+    expect(refusal(repo, { allowed_owners: [], private_repos: false }, "igorovh", true)).toContain("private");
+    expect(refusal(repo, { allowed_owners: [], private_repos: false }, "igorovh", false)).toBeNull();
+    expect(refusal(repo, { allowed_owners: [], private_repos: true }, "igorovh", true)).toBeNull();
   });
 
   test("commands from people without write access are dropped before they use up a run", () => {
