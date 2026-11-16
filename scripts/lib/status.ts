@@ -1,5 +1,6 @@
 import type { Target } from "./credentials";
 import type { GitHubClient } from "./github";
+import { withoutCode } from "./sanitize";
 
 const STATUS = /<!-- tidy:status run=\d+ -->/;
 
@@ -13,7 +14,8 @@ export function statusComment(gh: GitHubClient, target: Target, bot: string, run
   const comments = `/repos/${target.repo}/issues/${target.number}/comments`;
   const latest = async () =>
     (await gh.paginate<{ id: number; body: string; user: { login: string } | null }>(comments, 300))
-      .filter((c) => c.user?.login === bot && STATUS.test(c.body))
+      // A marker inside code is quoted text, such as from a model reply, not a status note.
+      .filter((c) => c.user?.login === bot && STATUS.test(withoutCode(c.body)))
       .pop();
   const write = (id: number | undefined, text: string) =>
     id

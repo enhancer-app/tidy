@@ -1,7 +1,8 @@
 import { isAdmin } from "./admin";
 import { type Env, stateOf } from "./env";
 import { github, GitHubError, installationToken } from "./github";
-import { loadInstance } from "./instance";
+import { loadInstance, resolveRepo } from "./instance";
+import { loadSettings, ownerAllowed } from "./webhook";
 
 const deny = (message: string, status: number) => Response.json({ error: message }, { status });
 
@@ -27,9 +28,12 @@ export async function handleRepos(request: Request, env: Env): Promise<Response>
   }
   if (!(await isAdmin(env, instance, login))) return deny("not an admin of the tidy repository", 403);
 
-  const installations = await github<{ id: number }[]>("/app/installations?per_page=100", { app: instance.app });
+  const installations = await github<{ id: number; account: { login: string } | null }[]>("/app/installations?per_page=100", { app: instance.app });
+  // A public App's other installations are not ours to list, and would push ours out of the first 10.
+  const settings = await loadSettings(instance, await resolveRepo(env, instance));
+  const ours = installations.filter((i) => ownerAllowed(i.account?.login ?? "", settings.access, instance.app.ownerLogin));
   const repos: string[] = [];
-  for (const installation of installations.slice(0, 10)) {
+  for (const installation of ours.slice(0, 10)) {
     const access = await installationToken(instance.app, installation.id, { metadata: "read" });
     for (let page = 1; page <= 5; page++) {
       const batch = await github<{ repositories: { full_name: string }[] }>(`/installation/repositories?per_page=100&page=${page}`, {

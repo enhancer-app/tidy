@@ -29,14 +29,17 @@ GitHub's App installation page.
 
 ### Organizations and other accounts
 
-The setup page creates a private App, which GitHub lets you install only on the account that owns it. To
-use tidy in an organization too, even your own:
+The setup page creates a private App, which GitHub lets you install only on the account that owns it,
+even when you own the organization too. There are two ways to use tidy in an organization:
 
-1. Add the organization to `allowed_owners` in `tidy.yml` (see
-   [Configuration](configuration.md#accounts-and-private-repositories)) and push.
-2. Make the App public: GitHub → Settings → Developer settings → GitHub Apps → your App → Advanced →
-   **Make public**. Anyone can then install it, but only `allowed_owners` get runs.
-3. Install it on the organization from `https://github.com/apps/<your-app>/installations/new`.
+- **A separate instance (recommended).** Create a copy of this template inside the organization, change
+  `name` in `wrangler.jsonc` so it gets its own Worker, deploy it, and on the setup page choose "an
+  organization". The organization then has its own bot, keys, limits and logs.
+- **One shared instance.** Add the organization to `allowed_owners` in `tidy.yml` (see
+  [Configuration](configuration.md#accounts-and-private-repositories)), then make the App public: GitHub →
+  Settings → Developer settings → GitHub Apps → your App → Advanced → **Make public**, and install it on
+  the organization. Anyone can then install it; tidy suspends installations of accounts that are not
+  listed.
 
 While your tidy repository is public, tidy skips private repositories, because run logs show their code.
 

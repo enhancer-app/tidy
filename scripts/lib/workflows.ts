@@ -39,7 +39,10 @@ export function pushReachesTidy(push: unknown): boolean {
 export function secretWorkflows(files: { path: string; text: string }[]): string[] {
   return files
     .filter(({ text }) => {
-      const usesSecrets = /secrets\s*:\s*inherit|secrets\.(?!GITHUB_TOKEN\b)[A-Za-z_]|secrets\[|id-token\s*:\s*write|permissions\s*:\s*write-all/.test(text);
+      // A GITHUB_TOKEN with write scopes can push, publish or label, so it counts like a secret.
+      const usesSecrets =
+        /secrets\s*:\s*inherit|secrets\.(?!GITHUB_TOKEN\b)[A-Za-z_]|secrets\[|id-token\s*:\s*write|permissions\s*:\s*write-all/.test(text) ||
+        /^\s*(contents|packages|pull-requests|issues|actions|deployments|pages|statuses|checks|security-events|discussions|attestations)\s*:\s*write\b/m.test(text);
       if (!usesSecrets) return false;
       try {
         const doc = Bun.YAML.parse(text) as Record<string, unknown> | null;

@@ -7,6 +7,7 @@ import { env, setOutput } from "./lib/actions";
 import { type Kind, parseTriage, route } from "./lib/config";
 import { requestCredentials } from "./lib/credentials";
 import { type AgentTask, PROJECT_CONFIG, sandboxConfig } from "./lib/opencode";
+import { dropEscapingLinks } from "./lib/links";
 import { buildPatch } from "./lib/patch";
 import { leaksKey, type ProviderProblem, providerProblem } from "./lib/provider";
 import { validateReview } from "./lib/review";
@@ -71,7 +72,11 @@ function prepareSandbox(step: Step): { work: string; stash: string } {
   mkdirSync(join(sandbox, "etc"), { recursive: true });
   mkdirSync(stash, { recursive: true });
   if (step.task === "triage") mkdirSync(work);
-  else cpSync(join(context, "source"), work, { recursive: true, verbatimSymlinks: true });
+  else {
+    cpSync(join(context, "source"), work, { recursive: true, verbatimSymlinks: true });
+    const removed = dropEscapingLinks(work);
+    if (removed.length) console.log(`Removed ${removed.length} symlinks that point outside the repository`);
+  }
   for (const name of PROJECT_CONFIG) if (existsSync(join(work, name))) renameSync(join(work, name), join(stash, name));
   for (const name of ["thread.md", "diff.patch", "previous.md"]) if (existsSync(join(context, name))) cpSync(join(context, name), join(sandbox, "context", name));
   const checks = join(temp, "checks", "checks.md");

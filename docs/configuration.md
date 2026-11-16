@@ -94,13 +94,14 @@ branches tidy never pushes, such as one limited to `renovate/` branches.
 ## Accounts and private repositories
 
 ```yaml
-allowed_owners: [igorovh, enhancer-app]
+allowed_owners: []                 # for example [you, your-org] if the App is public
 private_repos: false
 ```
 
-`allowed_owners` lists the accounts and organizations whose repositories tidy works in. Leave it out to
-allow only the App's owner. The Worker checks it before anything else, so if someone else installs a public
-App, their events start nothing.
+`allowed_owners` lists the accounts and organizations whose repositories tidy works in. Leave it empty to
+allow only the App's owner, which is all a private App needs. The Worker checks it before anything else,
+and when someone else installs a public App, it suspends that installation so GitHub stops sending its
+events.
 
 Runs log the code they read in your tidy repository's Actions. While that repository is public, tidy
 skips private repositories. Set `private_repos: true` only after you make your tidy repository private.
@@ -123,8 +124,9 @@ The Worker checks the first four before it starts a run, so a refused event cost
 webhook. It reads them from `tidy.yml` on your tidy repository's default branch and picks up changes
 within 5 minutes, without a redeploy. A value that is not a whole number keeps its default.
 
-Maintainers are the repository's owner, members and collaborators, as GitHub reports them, and tidy
-itself. Their events only count towards `runs_per_day` and `runs_per_repo_per_day`. Commands such as
+Maintainers are the repository's owner, tidy itself, and anyone the GitHub API reports with write,
+maintain or admin access. Organization members with read or triage access only are not maintainers.
+Maintainers' events only count towards `runs_per_day` and `runs_per_repo_per_day`. Commands such as
 `@tidy fix` from anyone else are ignored before they use up a run.
 
 ## Protection

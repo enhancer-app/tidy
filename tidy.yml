@@ -46,9 +46,10 @@ agent:
   image: node:22-bookworm
   timeout_minutes: 30
 
-# Accounts whose repositories tidy works in. The App must be public to install it on an organization,
-# and then anyone could install it, so only these owners get runs. Empty means only the App's owner.
-allowed_owners: [igorovh, enhancer-app]
+# Accounts whose repositories tidy works in. Empty means only the App's owner, which fits a private
+# App. If you make the App public to install it on another account, list every account here: anyone
+# can then install it, and installations of other accounts are suspended.
+allowed_owners: []
 
 # Runs log the code they read, and this repository's Actions logs are public, so tidy skips private
 # repositories. Set to true only if this repository is private.

@@ -47,6 +47,14 @@ describe("status comment", () => {
     expect(comments.find((c) => c.user.login === bot)?.body).toContain("reviewing the new push");
   });
 
+  test("a marker quoted in code in another tidy comment is not a status note", async () => {
+    const { gh, comments } = thread();
+    comments.push({ id: 50, body: "Here is the marker: `<!-- tidy:status run=1 -->`", user: { login: bot } });
+    await statusComment(gh, target, bot, "100").start("reviewing");
+    expect(comments.find((c) => c.id === 50)?.body).toContain("Here is the marker");
+    expect(comments.filter((c) => c.user.login === bot)).toHaveLength(2);
+  });
+
   test("without a note there is nothing to edit, so the caller posts its own comment", async () => {
     const { gh } = thread();
     expect(await statusComment(gh, target, bot, "100").finish("result")).toBe(false);

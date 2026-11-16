@@ -23,7 +23,9 @@ export type Jwks = { keys: (JsonWebKey & { kid: string })[] };
 let jwksCache: { at: number; jwks: Jwks } | undefined;
 
 async function fetchJwks(force: boolean): Promise<Jwks> {
-  if (!force && jwksCache && Date.now() - jwksCache.at < 3_600_000) return jwksCache.jwks;
+  // A token with an unknown key forces a refresh; at most once a minute, so forged tokens cannot make us hammer GitHub.
+  const age = jwksCache ? Date.now() - jwksCache.at : Infinity;
+  if (jwksCache && (force ? age < 60_000 : age < 3_600_000)) return jwksCache.jwks;
   const response = await fetch(`${ISSUER}/.well-known/jwks`);
   if (!response.ok) throw new Error(`JWKS fetch failed: ${response.status}`);
   jwksCache = { at: Date.now(), jwks: await response.json() };

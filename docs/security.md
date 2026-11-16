@@ -28,11 +28,18 @@ tidy assumes the model can be talked into anything, and limits what it can do in
   or tokens. Their commands come from the default branch; the model only picks extra arguments, passed
   as a list. Extras run as root with network access, so for outsiders' pull requests they run only
   when a maintainer asks with `@tidy review`.
-- **Model keys stay out of posts.** The agent cannot read `/proc`, `/sys` or `/dev`, and tidy discards
-  any result or patch that contains a configured key.
+- **Model keys stay out of posts.** The agent cannot read `/proc`, `/sys` or `/dev`. Symlinks in the
+  checked-out code that point outside the repository are removed first, so a pull request cannot reach
+  those files through a link. tidy discards any result or patch that contains a configured key, and
+  `/admin` refuses key names such as `PATH` or `NODE_OPTIONS` that would change how the agent runs.
 - **Abuse limits.** People without write access get a few events a day, a few follow-up reviews per
   pull request, at most two issues or pull requests handled a day, and their commands are ignored. The
-  Worker also caps runs per day in total and per repository. See [Limits](configuration.md#limits).
+  Worker checks real write access through the API, because GitHub marks every organization member as
+  `MEMBER`, even with read access only. The `tidy:review` label never buys a second review of the same
+  commit. The Worker also caps runs per day in total and per repository. See
+  [Limits](configuration.md#limits).
+- **Only your accounts.** Runs start only for `allowed_owners`, and installations by anyone else are
+  suspended. See [Accounts](configuration.md#accounts-and-private-repositories).
 - **The Worker** verifies webhook signatures and stores keys encrypted with a master key kept as a Worker
   secret. `/admin` uses GitHub sign-in (PKCE, admins of the tidy repository only, one-hour sessions,
   CSRF tokens). Keys can be replaced but not read back; the page shows only their last 4 characters.

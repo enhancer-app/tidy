@@ -12,6 +12,12 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const origin = url.origin;
+    // Reading a huge body could use up the free plan's CPU time; GitHub and our own forms send far less.
+    if (request.method === "POST") {
+      const limit = url.pathname === "/webhook" ? 2_000_000 : 64_000;
+      const length = Number(request.headers.get("content-length") ?? NaN);
+      if (!Number.isFinite(length) || length > limit) return new Response("body too large or without a length", { status: 413 });
+    }
     try {
       if (url.pathname === "/webhook" && request.method === "POST") return await handleWebhook(request, env, origin);
       if (url.pathname === "/token" && request.method === "POST") return await handleToken(request, env);

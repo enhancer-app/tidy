@@ -25,8 +25,11 @@ export const PROVIDERS: Record<string, { label: string; env: string }> = {
 /** The variable a key is stored under: the provider's, or a custom name when the provider is "other" or absent. */
 export function keyName(provider: string | null, name: string | null): string | null {
   if (provider && provider !== "other") return Object.hasOwn(PROVIDERS, provider) ? PROVIDERS[provider]!.env : null;
-  return name && KEY_NAME.test(name) ? name : null;
+  return name && KEY_NAME.test(name) && !RESERVED.test(name) ? name : null;
 }
+
+// Keys become environment variables in the agent container; these would change how it runs instead.
+const RESERVED = /^(PATH|HOME|SHELL|USER|MODEL|NODE_OPTIONS|NODE_PATH|LD_|DYLD_|BUN_|NPM_|NPM$|OPENCODE_(?!API_KEY$)|BASH_|ENV$|TZ$)/;
 
 interface Session {
   uid: number;

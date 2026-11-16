@@ -129,7 +129,8 @@ describe("webhooks", () => {
   test("the tidy:review label asks for a review of any pull request, even a bot's", () => {
     const labeled = (name: string) =>
       classify("pull_request", { ...base, action: "labeled", sender: { login: "renovate[bot]", type: "Bot" }, label: { name }, pull_request: { number: 7, draft: false } }, bot, "alice/tidy");
-    expect(labeled("tidy:review")).toMatchObject({ kind: "review", number: 7, requested: true, trusted: true });
+    // Labelling only needs triage access, so the labeller is not trusted until write access is checked.
+    expect(labeled("tidy:review")).toMatchObject({ kind: "review", number: 7, requested: true, trusted: false, maybeMaintainer: true });
     expect(labeled("dependencies")).toBeNull();
   });
 
@@ -162,23 +163,26 @@ describe("webhooks", () => {
     expect(comment("OWNER")).not.toBeNull();
   });
 
-  test("maintainers, the repository owner and tidy itself are trusted; others are not", () => {
-    const issue = (sender: { login: string; type: string }, author_association?: string) =>
-      classify(
+  test("only the owner and tidy are trusted outright; members are only worth a write-access check", () => {
+    const issue = (sender: { login: string; type: string }, author_association?: string) => {
+      const match = classify(
         "issues",
         { ...base, repository: { ...base.repository, owner: { login: "alice" } }, action: "opened", sender, issue: { number: 3, state: "open", author_association } },
         bot,
         "alice/tidy",
-      )?.trusted;
-    expect(issue(human, "MEMBER")).toBe(true);
-    expect(issue({ login: "Alice", type: "User" })).toBe(true);
-    expect(issue(human, "NONE")).toBe(false);
-    expect(issue(human, "FIRST_TIME_CONTRIBUTOR")).toBe(false);
+      );
+      return [match?.trusted, match?.maybeMaintainer];
+    };
+    // GitHub calls every organization member MEMBER, even with read access only.
+    expect(issue(human, "MEMBER")).toEqual([false, true]);
+    expect(issue({ login: "Alice", type: "User" })).toEqual([true, true]);
+    expect(issue(human, "NONE")).toEqual([false, false]);
+    expect(issue(human, "FIRST_TIME_CONTRIBUTOR")).toEqual([false, false]);
   });
 
   test("outsiders meet per-person and per-PR caps; maintainers only the safety caps", () => {
     const limits = { runs_per_day: 300, runs_per_repo_per_day: 100, outsider_events_per_day: 10, outsider_pushes_per_pr_per_day: 6 };
-    const push = { repo: "Alice/App", repoId: 5, kind: "review" as const, number: 4, followUp: true, sender: "Bob" };
+    const push = { repo: "Alice/App", repoId: 5, kind: "review" as const, number: 4, followUp: true, sender: "Bob", maybeMaintainer: false };
     expect(countersFor({ ...push, trusted: true }, limits, "2026-11-12").map((c) => c.key)).toEqual(["runs:2026-11-12", "repo:alice/app:2026-11-12"]);
     expect(countersFor({ ...push, trusted: false }, limits, "2026-11-12")).toEqual([
       { key: "runs:2026-11-12", limit: 300 },

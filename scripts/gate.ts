@@ -214,6 +214,11 @@ async function main() {
     if (!asked && !authorIsMaintainer) await checkLimit(gh, repo, "pr", pr.user.login, config);
     fork = pr.head.repo?.full_name !== repo;
     let diffPath = `/repos/${repo}/pulls/${target.number}`;
+    // Re-adding the tidy:review label must not buy another full review of a commit tidy already reviewed.
+    if (target.requested) {
+      const reviews = await gh.paginate<{ user: { login: string } | null; commit_id: string }>(`/repos/${repo}/pulls/${target.number}/reviews`);
+      if (reviews.some((r) => r.user?.login === credentials.bot.login && r.commit_id === pr.head.sha)) stop("this commit was already reviewed");
+    }
     if (target.follow_up) {
       if (!config.review.on_push) stop("reviews on push are turned off in .github/tidy.yml");
       const reviews = await gh.paginate<{ user: { login: string } | null; commit_id: string; body: string }>(

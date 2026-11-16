@@ -3,6 +3,7 @@ import { type Dispatch, type Env, stateOf } from "./env";
 import { installationToken } from "./github";
 import { loadInstance, resolveRepo } from "./instance";
 import { roleFor, verifyActionsToken } from "./oidc";
+import { loadSettings, ownerAllowed } from "./webhook";
 
 const WRITE_TOKENS_PER_RUN = 4;
 
@@ -33,6 +34,9 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   });
   if ("error" in redeemed) return deny(redeemed.error);
   const dispatch = JSON.parse(redeemed.dispatch) as Dispatch;
+  // tidy.yml may have dropped this owner since the event arrived.
+  const settings = await loadSettings(instance, repo);
+  if (!ownerAllowed(dispatch.repo.split("/")[0]!, settings.access, instance.app.ownerLogin)) return deny("owner not in allowed_owners");
 
   const target = { kind: dispatch.kind, repo: dispatch.repo, number: dispatch.number, comment_id: dispatch.commentId, reaction: dispatch.reaction, follow_up: dispatch.followUp, requested: dispatch.requested };
   let credentials: Record<string, unknown>;
