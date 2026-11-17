@@ -1,6 +1,6 @@
 import { decrypt, deriveKeys, encrypt } from "./crypto";
 import { type Env, type Instance, stateOf } from "./env";
-import { github, installationToken } from "./github";
+import { github, GitHubError, installationToken } from "./github";
 
 // Saves a Durable Object call per request; a key change made in another isolate shows up within a minute.
 const CACHE_MS = 60_000;
@@ -21,11 +21,24 @@ export async function saveInstance(env: Env, instance: Instance): Promise<void> 
   cache = { at: Date.now(), value: instance };
 }
 
+/** The App is not installed on the tidy repository, which it needs to start workflows and check admins. */
+export class NotInstalledError extends Error {
+  constructor(
+    readonly repo: string,
+    readonly slug: string,
+  ) {
+    super(`The GitHub App ${slug} is not installed on ${repo}`);
+  }
+}
+
 /** Resolves the tidy repository's IDs once the App is installed on it. */
 export async function resolveRepo(env: Env, instance: Instance): Promise<Required<Instance["repo"]>> {
   const repo = instance.repo;
   if (repo.id && repo.ownerId && repo.defaultBranch && repo.installationId) return repo as Required<Instance["repo"]>;
-  const installation = await github<{ id: number }>(`/repos/${repo.fullName}/installation`, { app: instance.app });
+  const installation = await github<{ id: number }>(`/repos/${repo.fullName}/installation`, { app: instance.app }).catch((error) => {
+    if (error instanceof GitHubError && error.status === 404) throw new NotInstalledError(repo.fullName, instance.app.slug);
+    throw error;
+  });
   const token = await installationToken(instance.app, installation.id, { metadata: "read" });
   const data = await github<{ id: number; owner: { id: number }; default_branch: string }>(`/repos/${repo.fullName}`, {
     token: token.token,

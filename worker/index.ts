@@ -1,7 +1,8 @@
 import { handleAdmin } from "./admin";
 import { handleRepos } from "./api";
 import type { Env } from "./env";
-import { page } from "./html";
+import { escape, page } from "./html";
+import { NotInstalledError } from "./instance";
 import { handleSetup, handleSetupCallback } from "./setup";
 import { handleToken } from "./token";
 import { handleWebhook } from "./webhook";
@@ -28,6 +29,20 @@ export default {
       if (url.pathname === "/") return page("tidy", `<p>This Worker runs a tidy instance. Admins: <a href="/admin">/admin</a>.</p>`);
       return new Response("not found", { status: 404 });
     } catch (error) {
+      // The one setup mistake people make: say how to fix it instead of "internal error".
+      if (error instanceof NotInstalledError) {
+        const install = `https://github.com/apps/${encodeURIComponent(error.slug)}/installations/new`;
+        if (url.pathname === "/" || url.pathname.startsWith("/admin")) {
+          return page(
+            "Install the App on the tidy repository",
+            `<p>The GitHub App <b>${escape(error.slug)}</b> is not installed on <code>${escape(error.repo)}</code>.
+tidy needs it there to start its workflows and to check who can sign in.</p>
+<p><a href="${escape(install)}">Open the App's installation settings</a>, add <code>${escape(error.repo)}</code>, save, then reload this page.</p>`,
+            { status: 503 },
+          );
+        }
+        return Response.json({ error: `${error.message}; add it at ${install}` }, { status: 503 });
+      }
       // Details go to Workers logs only; responses never echo internal errors.
       console.error(error);
       return new Response("internal error", { status: 500 });
