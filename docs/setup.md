@@ -86,11 +86,20 @@ because that needs an administration permission much broader than the one it pro
 
 ## Update
 
-Your copy does not follow this template automatically. To pull fixes, add this repository as a remote
-and merge, then deploy again:
+Your copy does not follow this template automatically. A copy made with **Use this template** shares no
+history with it, so the first update joins the histories once, taking this repository's version of every
+file:
 
 ```sh
 git remote add upstream https://github.com/igorovh/tidy.git
+git fetch upstream
+git merge --allow-unrelated-histories -X theirs upstream/main
+```
+
+That merge overwrites your own changes, so check `git diff upstream/main` and put back what you changed,
+such as `name` in `wrangler.jsonc` or your `tidy.yml`, then commit. Later updates are ordinary merges:
+
+```sh
 git pull upstream main
 bun run deploy
 ```
