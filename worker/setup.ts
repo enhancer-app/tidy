@@ -17,7 +17,7 @@ export function manifest(origin: string, repo: string, name: string) {
     public: false,
     request_oauth_on_install: false,
     default_permissions: { contents: "write", pull_requests: "write", issues: "write", metadata: "read" },
-    default_events: ["issues", "issue_comment", "pull_request"],
+    default_events: ["issues", "issue_comment", "pull_request", "pull_request_review_comment"],
   };
 }
 
@@ -60,7 +60,7 @@ export async function handleSetup(request: Request, env: Env, origin: string): P
     `<p>GitHub will create <b>${escape(name)}</b> with the permissions tidy needs and send its key straight to this Worker.
 You never download or copy it.</p>
 <ul><li>Repository permissions: contents, pull requests and issues (write), metadata (read). No workflows permission.</li>
-<li>Events: issues, issue comments, pull requests.</li></ul>
+<li>Events: issues, issue comments, pull requests, pull request review comments.</li></ul>
 <form method="post" action="${escape(action)}"><input type="hidden" name="manifest" value="${escape(JSON.stringify(manifest(origin, repo, name)))}">
 <button class="primary">Create GitHub App</button></form>`,
   );

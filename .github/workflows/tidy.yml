@@ -9,8 +9,9 @@ on:
 permissions: {}
 
 # A push during a review cancels it, so a burst of commits gets one review of the latest one.
+# Replies in one review thread wait for each other; other threads run alongside.
 concurrency:
-  group: tidy-${{ github.event.client_payload.repo }}-${{ github.event.client_payload.number }}-${{ github.event.client_payload.kind }}
+  group: tidy-${{ github.event.client_payload.repo }}-${{ github.event.client_payload.number }}-${{ github.event.client_payload.kind }}-${{ github.event.client_payload.thread || 0 }}
   cancel-in-progress: ${{ github.event.client_payload.kind == 'review' }}
 
 jobs:
@@ -76,8 +77,20 @@ jobs:
       task: review
       model: ${{ needs.gate.outputs.review-model }}
 
+  # Answers a reply to one of tidy's inline comments, in that thread. No checks, no new review.
+  thread:
+    needs: gate
+    if: needs.gate.outputs.task == 'thread'
+    uses: ./.github/workflows/agent.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      task: thread
+      model: ${{ needs.gate.outputs.review-model }}
+
   publish:
-    needs: [gate, announce, issue, review]
+    needs: [gate, announce, issue, review, thread]
     # Always runs, so the 👀 reaction is resolved even when tidy skips the event or fails.
     if: always()
     uses: ./.github/workflows/publish.yml

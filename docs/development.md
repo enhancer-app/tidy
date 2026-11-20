@@ -13,7 +13,7 @@ bun test
 | `worker/` | The Cloudflare Worker: webhooks, `/setup`, `/admin`, credentials and the Durable Object |
 | `scripts/` | Code the workflows run: `gate.ts`, `agent.ts`, `checks.ts`, `publish.ts`, plus `deploy.ts` and `protect.ts` |
 | `shared/` | Code both sides use, such as sealing credentials to a job's key |
-| `prompts/` | Prompts for triage, fixes, replies, reviews and extra planning |
+| `prompts/` | Prompts for triage, fixes, replies, reviews, thread replies and extra planning |
 | `.github/workflows/` | `tidy.yml` and the reusable workflows it calls |
 | `tests/` | Unit tests, run with `bun test` |
 

@@ -16,7 +16,7 @@ Keys live only in the Worker. Change models here; change keys in `/admin`.
 | `models.allowed` | yes | no |
 | `triage.model`, `routes`, `review.model` | yes | yes, within `models.allowed` |
 | `review.checks`, `review.image`, `review.extras` | `checks` and `image` | yes |
-| `review.on_push` | yes | yes |
+| `review.on_push`, `review.thread_replies` | yes | yes |
 | `review.max_auto_reviews`, `limits.outsider_attempts_per_day` | yes | only lower |
 | other `limits` | yes | no |
 | `protected_paths` | yes | only add |
@@ -70,9 +70,14 @@ review:
   image: node:22-bookworm         # container image for checks
   on_push: true                   # follow-up reviews of new commits
   max_auto_reviews: 5             # outsiders' pull requests: after 5 reviews only `@tidy review` starts one
+  thread_replies: maintainers     # who gets an answer when replying to tidy's inline comments
 ```
 
 Maintainers' pull requests have no cap on automatic reviews.
+
+`thread_replies` is `maintainers`, `everyone` or `off`. With `everyone`, replies from people without
+write access count towards their `outsider_events_per_day`. See
+[Replies in review threads](how-it-works.md#replies-in-review-threads).
 
 `checks` run on the pull request's code in a container without secrets, and the reviewer reads their
 output. Pick commands that work offline and without credentials. The container has no `.git`, so a check
@@ -115,7 +120,7 @@ limits:
   runs_per_day: 300                  # workflow runs per UTC day across the instance
   runs_per_repo_per_day: 100         # workflow runs per UTC day in one repository
   # People without write access only.
-  outsider_events_per_day: 10        # issues, pull requests and pushes per person
+  outsider_events_per_day: 10        # issues, pull requests, pushes and thread replies per person
   outsider_pushes_per_pr_per_day: 6  # follow-up reviews per pull request
   outsider_attempts_per_day: 2       # issues and pull requests tidy handles per person
 ```

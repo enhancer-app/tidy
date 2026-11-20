@@ -1,4 +1,5 @@
 import { parse } from "yaml";
+import { type ThreadReplies, threadReplies } from "./replies";
 
 /** Run limits the Worker enforces before it starts a workflow. Set them under `limits:` in tidy.yml. */
 export interface RunLimits {
@@ -6,7 +7,7 @@ export interface RunLimits {
   runs_per_day: number;
   /** Workflow runs per UTC day in one repository, for everyone. */
   runs_per_repo_per_day: number;
-  /** Events (issues, pull requests, pushes) per UTC day from one person without write access. */
+  /** Events (issues, pull requests, pushes, thread replies) per UTC day from one person without write access. */
   outsider_events_per_day: number;
   /** Follow-up reviews per UTC day on one pull request by someone without write access. */
   outsider_pushes_per_pr_per_day: number;
@@ -30,6 +31,8 @@ export interface Access {
 export interface WorkerSettings {
   limits: RunLimits;
   access: Access;
+  /** The instance default for `review.thread_replies`; a repository's .github/tidy.yml can change it. */
+  thread_replies: ThreadReplies;
 }
 
 /**
@@ -37,7 +40,7 @@ export interface WorkerSettings {
  * exist, so this uses the `yaml` package. A value of the wrong type keeps its default.
  */
 export function parseWorkerSettings(text: string): WorkerSettings {
-  const doc = (parse(text) ?? {}) as { limits?: Record<string, unknown>; allowed_owners?: unknown; private_repos?: unknown };
+  const doc = (parse(text) ?? {}) as { limits?: Record<string, unknown>; allowed_owners?: unknown; private_repos?: unknown; review?: { thread_replies?: unknown } };
   const limits = { ...DEFAULT_LIMITS };
   for (const key of Object.keys(limits) as (keyof RunLimits)[]) {
     const value = doc.limits?.[key];
@@ -53,5 +56,15 @@ export function parseWorkerSettings(text: string): WorkerSettings {
         .filter((o) => /^[a-z0-9-]{1,39}$/.test(o)),
       private_repos: doc.private_repos === true,
     },
+    thread_replies: threadReplies(doc.review?.thread_replies) ?? "maintainers",
   };
+}
+
+/** `review.thread_replies` from a repository's .github/tidy.yml, if it sets a valid one. */
+export function repoThreadReplies(text: string): ThreadReplies | undefined {
+  try {
+    return threadReplies((parse(text) as { review?: { thread_replies?: unknown } } | null)?.review?.thread_replies);
+  } catch {
+    return undefined;
+  }
 }

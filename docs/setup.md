@@ -103,3 +103,7 @@ such as `name` in `wrangler.jsonc` or your `tidy.yml`, then commit. Later update
 git pull upstream main
 bun run deploy
 ```
+
+An update can need a new webhook event, which GitHub does not add to an existing App. For
+[thread replies](how-it-works.md#replies-in-review-threads), open your App's settings on GitHub, go to
+**Permissions & events**, and under **Subscribe to events** tick **Pull request review comment**.

@@ -7,9 +7,10 @@ import { requestCredentials } from "./lib/credentials";
 import { canWrite, client, GitHubError, type GitHubClient } from "./lib/github";
 import { withoutCode } from "./lib/sanitize";
 import { fetchSource } from "./lib/source";
+import { groupThreads, type InlineComment, renderThreads, replyRefusal, threadStates } from "./lib/threads";
 import { PENDING, secretWorkflows } from "./lib/workflows";
 
-export type Task = "triage" | "review" | "publish" | "none";
+export type Task = "triage" | "review" | "thread" | "publish" | "none";
 
 export interface Meta {
   task: Task;
@@ -27,6 +28,8 @@ export interface Meta {
   followUp: boolean;
   /** Names of the review extras whose `when` globs match this pull request. */
   extras: string[];
+  /** For a thread task: the review thread tidy started and the reply it answers. */
+  thread?: { root: number; reply: number };
   config: Config;
 }
 
@@ -151,7 +154,7 @@ async function main() {
       task = "publish";
     } else stop(`unknown command: ${words.join(" ")}`);
   } else {
-    task = target.kind === "review" ? "review" : "triage";
+    task = target.kind === "review" ? "review" : target.kind === "thread" ? "thread" : "triage";
   }
 
   if (issue.state !== "open") stop("issue or pull request is closed");
@@ -184,8 +187,43 @@ async function main() {
   let risky: string[] = [];
   let extras: string[] = [];
   let followUp = false;
+  let replyTo: Meta["thread"];
+  const role = (login: string) => roles.get(login) ?? "outside contributor";
+  const addRoles = async (logins: string[]) => {
+    for (const login of new Set(logins)) if (login && !roles.has(login)) roles.set(login, (await isWriter(login)) ? "maintainer" : "outside contributor");
+  };
+  const writeDiff = (diff: string) =>
+    writeFileSync(join(out, "diff.patch"), diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}\n… diff truncated …\n` : diff);
 
-  if (task === "triage") {
+  if (task === "thread") {
+    if (!issue.pull_request) stop("thread replies run on pull requests only");
+    const mode = config.review.thread_replies;
+    if (mode === "off") stop("thread replies are off in .github/tidy.yml");
+    const inline = await gh.paginate<InlineComment>(`/repos/${repo}/pulls/${target.number}/comments`, 1000);
+    const reply = inline.find((c) => c.id === target.comment_id);
+    if (!reply?.user) stop("the reply was deleted");
+    if (reply.user.login === bot || reply.user.type === "Bot") stop("the reply was written by a bot");
+    if (reply.in_reply_to_id !== target.thread) stop("the reply moved to another thread");
+    if (mode === "maintainers" && !(await isWriter(reply.user.login))) stop(`@${reply.user.login} has no write access and thread replies are for maintainers`);
+    const current = groupThreads(inline, await threadStates(gh, repo, target.number, notice)).find((t) => t.root.id === reply.in_reply_to_id);
+    const refused = replyRefusal(current, reply, bot);
+    if (refused || !current) stop(refused ?? "tidy did not start this thread");
+    await addRoles(current.replies.map((r) => r.user?.login ?? ""));
+    const pr = await gh.request<{ title: string; body: string | null; user: User; head: { sha: string } }>(`/repos/${repo}/pulls/${target.number}`);
+    writeFileSync(join(out, "review-thread.md"), renderThreads([current], bot, role));
+    let diff: string;
+    try {
+      diff = await gh.request<string>(`/repos/${repo}/pulls/${target.number}`, { accept: "application/vnd.github.diff" });
+    } catch (error) {
+      if (!(error instanceof GitHubError && error.status === 406)) throw error;
+      diff = "The diff is too large for the GitHub API. Inspect the changed files in the checkout.\n";
+    }
+    writeDiff(diff);
+    writeFileSync(join(out, "thread.md"), thread(`Pull request #${target.number}`, pr, comments, roles));
+    base = fetchSource(repo, `refs/pull/${target.number}/head`, credentials.token!, ctx);
+    if (base !== pr.head.sha) stop("the pull request changed while tidy was reading it");
+    replyTo = { root: current.root.id, reply: reply.id };
+  } else if (task === "triage") {
     if (issue.pull_request) stop("triage runs on issues only");
     if (issue.user.type === "Bot") stop("issue opened by a bot");
     const open = await gh.paginate<{ head: { ref: string; repo: { full_name: string } | null } }>(`/repos/${repo}/pulls?state=open`, 1000);
@@ -213,6 +251,10 @@ async function main() {
     const authorIsMaintainer = roles.get(pr.user.login) === "maintainer";
     if (!asked && !authorIsMaintainer) await checkLimit(gh, repo, "pr", pr.user.login, config);
     fork = pr.head.repo?.full_name !== repo;
+    const inline = await gh.paginate<InlineComment>(`/repos/${repo}/pulls/${target.number}/comments`, 1000);
+    await addRoles(inline.map((c) => c.user?.login ?? ""));
+    const threads = groupThreads(inline, await threadStates(gh, repo, target.number, notice));
+    writeFileSync(join(out, "review-threads.md"), renderThreads(threads, bot, role));
     let diffPath = `/repos/${repo}/pulls/${target.number}`;
     // Re-adding the tidy:review label must not buy another full review of a commit tidy already reviewed.
     if (target.requested) {
@@ -221,7 +263,7 @@ async function main() {
     }
     if (target.follow_up) {
       if (!config.review.on_push) stop("reviews on push are turned off in .github/tidy.yml");
-      const reviews = await gh.paginate<{ user: { login: string } | null; commit_id: string; body: string }>(
+      const reviews = await gh.paginate<{ id: number; user: { login: string } | null; commit_id: string; body: string }>(
         `/repos/${repo}/pulls/${target.number}/reviews`,
       );
       const ours = reviews.filter((r) => r.user?.login === credentials.bot.login);
@@ -240,7 +282,9 @@ async function main() {
         if (compare.status === "ahead") {
           followUp = true;
           diffPath = `/repos/${repo}/compare/${previous.commit_id}...${pr.head.sha}`;
-          writeFileSync(join(out, "previous.md"), previous.body.slice(0, 50_000));
+          const own = inline.filter((c) => c.pull_request_review_id === previous.id && !c.in_reply_to_id);
+          const notes = own.map((c) => `### \`${c.path}\` line ${c.line ?? c.original_line ?? "?"}\n\n${c.body}`).join("\n\n");
+          writeFileSync(join(out, "previous.md"), `${previous.body}${notes ? `\n\n## Inline comments of that review\n\n${notes}` : ""}`.slice(0, 50_000));
         }
       }
     }
@@ -252,7 +296,7 @@ async function main() {
       if (!(error instanceof GitHubError && error.status === 406)) throw error;
       diff = "The diff is too large for the GitHub API. Inspect the changed files in the checkout.\n";
     }
-    writeFileSync(join(out, "diff.patch"), diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}\n… diff truncated …\n` : diff);
+    writeDiff(diff);
     writeFileSync(join(out, "thread.md"), thread(`Pull request #${target.number}`, pr, comments, roles));
     base = fetchSource(repo, `refs/pull/${target.number}/head`, credentials.token!, ctx);
     if (base !== pr.head.sha) stop("the pull request changed while tidy was reading it");
@@ -278,6 +322,7 @@ async function main() {
     secretWorkflows: risky,
     extras,
     followUp,
+    ...(replyTo ? { thread: replyTo } : {}),
     config,
   };
   writeFileSync(join(out, "meta.json"), JSON.stringify(meta, null, 2));

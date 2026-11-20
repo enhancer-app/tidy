@@ -38,7 +38,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   const settings = await loadSettings(instance, repo);
   if (!ownerAllowed(dispatch.repo.split("/")[0]!, settings.access, instance.app.ownerLogin)) return deny("owner not in allowed_owners");
 
-  const target = { kind: dispatch.kind, repo: dispatch.repo, number: dispatch.number, comment_id: dispatch.commentId, reaction: dispatch.reaction, follow_up: dispatch.followUp, requested: dispatch.requested };
+  const target = { kind: dispatch.kind, repo: dispatch.repo, number: dispatch.number, comment_id: dispatch.commentId, thread: dispatch.thread, reaction: dispatch.reaction, follow_up: dispatch.followUp, requested: dispatch.requested };
   let credentials: Record<string, unknown>;
   if (role === "agent") {
     credentials = { keys: Object.fromEntries(Object.entries(instance.keys).map(([name, key]) => [name, key.value])) };

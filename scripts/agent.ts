@@ -17,7 +17,7 @@ import type { Meta } from "./gate";
 const TITLE = /^(feat|fix|docs|refactor|perf|test|build|ci|chore|style|revert)(\([^\r\n)]{1,40}\))?!?: \S.{0,90}$/;
 
 const temp = env("RUNNER_TEMP");
-const job = env("TASK") as "issue" | "review" | "plan";
+const job = env("TASK") as "issue" | "review" | "plan" | "thread";
 const context = join(temp, "context");
 const meta = JSON.parse(readFileSync(join(context, "meta.json"), "utf8")) as Meta;
 const sandbox = join(temp, "sandbox");
@@ -78,7 +78,7 @@ function prepareSandbox(step: Step): { work: string; stash: string } {
     if (removed.length) console.log(`Removed ${removed.length} symlinks that point outside the repository`);
   }
   for (const name of PROJECT_CONFIG) if (existsSync(join(work, name))) renameSync(join(work, name), join(stash, name));
-  for (const name of ["thread.md", "diff.patch", "previous.md"]) if (existsSync(join(context, name))) cpSync(join(context, name), join(sandbox, "context", name));
+  for (const name of ["thread.md", "diff.patch", "previous.md", "review-threads.md", "review-thread.md"]) if (existsSync(join(context, name))) cpSync(join(context, name), join(sandbox, "context", name));
   const checks = join(temp, "checks", "checks.md");
   if (step.task === "review") writeFileSync(join(sandbox, "context", "checks.md"), existsSync(checks) ? readFileSync(checks) : "No checks are configured.\n");
   writeFileSync(join(sandbox, "context", "prompt.md"), prompt(step));
@@ -186,6 +186,14 @@ function emitPlan(value: Record<string, unknown>): void {
   setOutput("plan", "true");
 }
 
+// "skip" posts nothing, for replies that need no answer, such as thanks.
+function emitThreadReply(value: Record<string, unknown>): void {
+  if (value.outcome === "skip") return;
+  if (value.outcome !== "concede" && value.outcome !== "explain") throw new Error("The thread reply needs an outcome");
+  if (typeof value.body !== "string" || !value.body.trim()) throw new Error("The thread reply is empty");
+  emit({ type: "thread", body: sanitize(value.body, 4000), resolve: value.outcome === "concede" });
+}
+
 const comment = (body: string) => emit({ type: "comment", body: sanitize(body) });
 
 function finishFix(work: string, stash: string, value: Record<string, unknown>, kind: Kind): void {
@@ -254,6 +262,7 @@ async function main() {
     runStep({ task: job, model, shell: false });
     const value = readResult();
     if (job === "plan") return emitPlan(value);
+    if (job === "thread") return emitThreadReply(value);
     emit({ type: "review", ...validateReview(value, readFileSync(join(context, "diff.patch"), "utf8")) });
   } catch (error) {
     if (!(error instanceof ProviderError)) throw error;

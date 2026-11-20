@@ -1,3 +1,5 @@
+import { THREAD_REPLIES, type ThreadReplies, threadReplies } from "../../shared/replies";
+
 export const KINDS = ["bug", "feature", "docs", "question", "spam", "security"] as const;
 export const SIZES = ["small", "medium", "large"] as const;
 export const ACTIONS = ["fix", "reply", "ignore", "security-notice"] as const;
@@ -29,7 +31,7 @@ export interface Config {
   models: { allowed: string[] };
   triage: { model: string };
   routes: Route[];
-  review: { model: string; checks: string[]; image: string; extras: Extra[]; on_push: boolean; max_auto_reviews: number };
+  review: { model: string; checks: string[]; image: string; extras: Extra[]; on_push: boolean; max_auto_reviews: number; thread_replies: ThreadReplies };
   agent: { opencode: string; image: string; timeout_minutes: number };
   limits: { outsider_attempts_per_day: number };
   protected_paths: string[];
@@ -117,7 +119,8 @@ export function parseInstance(raw: unknown): Config {
     triage: { model: c.triage?.model },
     routes: parseRoutes(c.routes ?? []),
     review: { model: c.review?.model, checks: c.review?.checks ?? [], image: c.review?.image ?? "node:22-bookworm", extras: [],
-      on_push: c.review?.on_push !== false, max_auto_reviews: c.review?.max_auto_reviews ?? 5 },
+      on_push: c.review?.on_push !== false, max_auto_reviews: c.review?.max_auto_reviews ?? 5,
+      thread_replies: threadReplies(c.review?.thread_replies) ?? "maintainers" },
     agent: { opencode: c.agent?.opencode, image: c.agent?.image ?? "node:22-bookworm", timeout_minutes: c.agent?.timeout_minutes ?? 30 },
     limits: { outsider_attempts_per_day: c.limits?.outsider_attempts_per_day ?? 2 },
     protected_paths: c.protected_paths ?? [],
@@ -146,6 +149,12 @@ export function mergeRepo(instance: Config, raw: unknown, warn: (message: string
     warn(`${field} ${String(value)} is not allowed by this tidy instance; using ${fallback}`);
     return fallback;
   };
+  const replies = (value: unknown) => {
+    if (value === undefined) return instance.review.thread_replies;
+    const mode = threadReplies(value);
+    if (!mode) warn(`review.thread_replies must be one of ${THREAD_REPLIES.join(", ")}; using ${instance.review.thread_replies}`);
+    return mode ?? instance.review.thread_replies;
+  };
   const routes = repo.routes === undefined ? instance.routes : parseRoutes(repo.routes);
   const checks = repo.review?.checks;
   if (checks !== undefined && !(Array.isArray(checks) && checks.every((c) => typeof c === "string" && c.length < 500))) {
@@ -171,6 +180,7 @@ export function mergeRepo(instance: Config, raw: unknown, warn: (message: string
         typeof repo.review?.max_auto_reviews === "number" && repo.review.max_auto_reviews >= 0
           ? Math.min(repo.review.max_auto_reviews, instance.review.max_auto_reviews)
           : instance.review.max_auto_reviews,
+      thread_replies: replies(repo.review?.thread_replies),
     },
     protected_paths: [
       ...instance.protected_paths,
