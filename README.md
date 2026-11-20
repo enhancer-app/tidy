@@ -21,6 +21,8 @@ bugs and watch tidy triage it, open a fix and review it.
 - **Suggests one-click fixes.** Inline comments carry GitHub suggestions for small, certain fixes.
 - **Shows the change.** Review extras can attach before and after recordings, such as a GIF of the UI.
 - **Follows up.** New commits get a short review of what they fixed and what is still open.
+- **Listens.** Reply to an inline comment and tidy answers in the thread: it concedes and resolves it,
+  or explains once. It does not repeat findings a maintainer declined.
 - **Keeps secrets out of reach.** Keys live only in the Worker, and each job gets only what it needs.
 
 <table>

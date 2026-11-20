@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_LIMITS, parseWorkerSettings } from "../shared/limits";
+import { DEFAULT_LIMITS, parseWorkerSettings, repoThreadReplies } from "../shared/limits";
 import { leaksKey, providerNotice, providerProblem } from "../scripts/lib/provider";
 import { sandboxConfig } from "../scripts/lib/opencode";
 
@@ -23,6 +23,14 @@ describe("limits in tidy.yml", () => {
   test("allowed_owners accepts both list styles and drops names GitHub cannot have", () => {
     expect(parseWorkerSettings("allowed_owners: [igorovh, Enhancer-App]\n").access.allowed_owners).toEqual(["igorovh", "enhancer-app"]);
     expect(parseWorkerSettings("allowed_owners:\n  - igorovh\n  - not/valid\n").access.allowed_owners).toEqual(["igorovh"]);
+  });
+
+  test("the Worker reads who gets thread replies from tidy.yml and a repository's .github/tidy.yml", () => {
+    expect(parseWorkerSettings("review:\n  thread_replies: off\n").thread_replies).toBe("off");
+    expect(parseWorkerSettings("review:\n  thread_replies: anyone\n").thread_replies).toBe("maintainers");
+    expect(repoThreadReplies("review:\n  thread_replies: everyone\n")).toBe("everyone");
+    expect(repoThreadReplies("review: [broken")).toBeUndefined();
+    expect(repoThreadReplies("enabled: true\n")).toBeUndefined();
   });
 });
 

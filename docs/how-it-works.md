@@ -6,9 +6,10 @@ receives GitHub webhooks and holds the keys. The agent is [OpenCode](https://ope
 ```text
 GitHub event ──▶ Worker ──repository_dispatch──▶ tidy workflows in your tidy repository
 (issue, PR,       checks the signature,           gate     reads the thread, decides trust, snapshots the code
- @tidy comment)   holds the App key and           issue    triage, then a fix or reply, in one job
-                  model keys, applies the         plan     picks arguments for review extras
+ @tidy comment,   holds the App key and           issue    triage, then a fix or reply, in one job
+ review reply)    model keys, applies the         plan     picks arguments for review extras
                   run limits                      review   OpenCode in a container
+                                                  thread   answers a reply to an inline comment
                       │                           checks   your repo's tests, no credentials at all
                       └── per-job credentials ─── publish  the only job with write access
 ```
@@ -70,6 +71,18 @@ whether each thread is resolved. If a maintainer declined a finding with a reaso
 thread, tidy does not raise it again unless new code changes the situation. As a backstop, tidy never
 posts a new inline comment on the same file near such a thread, or with the same suggestion; the
 finding can still appear as one line in the review.
+
+## Replies in review threads
+
+When someone replies to one of tidy's inline comments, tidy answers in the same thread. It reads the
+thread, the code at the pull request's latest commit and the diff. Then it either concedes, and resolves
+the thread, or explains once, briefly, why the comment still holds. A reply such as thanks gets no
+answer. tidy does not push, run checks or post a new review for a reply.
+
+[`review.thread_replies`](configuration.md#reviews) decides whose replies count: `maintainers` (the
+default), `everyone`, or `off`. Replies from people without write access count towards their
+`limits.outsider_events_per_day`. tidy answers at most twice per thread, never in a resolved thread,
+and never in threads someone else started.
 
 ## Commands
 

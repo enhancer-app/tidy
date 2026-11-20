@@ -24,6 +24,9 @@ export interface Thread {
   nodeId?: string;
 }
 
+/** tidy's own replies per review thread. */
+export const MAX_THREAD_REPLIES = 2;
+
 export type ThreadStates = Map<number, { id: string; resolved: boolean }>;
 
 /** GitHub points every reply at the thread's first comment, so one level of grouping is enough. */
@@ -75,6 +78,16 @@ export async function resolveThread(gh: GitHubClient, nodeId: string): Promise<v
     body: { query: "mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { isResolved } } }", variables: { id: nodeId } },
   });
   if (result.errors?.length) throw new Error(result.errors[0]!.message);
+}
+
+/** Why tidy must not answer `reply`, if it must not. Explaining once and conceding later is enough. */
+export function replyRefusal(thread: Thread | undefined, reply: InlineComment, bot: string): string | null {
+  if (!thread || thread.root.user?.login !== bot) return "tidy did not start this thread";
+  if (thread.resolved) return "the thread is resolved";
+  const answers = thread.replies.filter((r) => r.user?.login === bot);
+  if (answers.some((r) => r.id > reply.id)) return "tidy already answered this reply";
+  if (answers.length >= MAX_THREAD_REPLIES) return `tidy already answered ${answers.length} times in this thread`;
+  return null;
 }
 
 const lineOf = (c: InlineComment) => c.line ?? c.original_line;

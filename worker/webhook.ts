@@ -1,5 +1,6 @@
 import { b64url, timingSafeEqual, utf8 } from "../shared/encoding";
-import { type Access, DEFAULT_LIMITS, parseWorkerSettings, type RunLimits, type WorkerSettings } from "../shared/limits";
+import { type Access, DEFAULT_LIMITS, parseWorkerSettings, repoThreadReplies, type RunLimits, type WorkerSettings } from "../shared/limits";
+import type { ThreadReplies } from "../shared/replies";
 import type { AppRecord, Dispatch, Env, Instance } from "./env";
 import { stateOf } from "./env";
 import { github, installationToken } from "./github";
@@ -18,11 +19,11 @@ export async function signatureMatches(secret: string, body: string, header: str
 interface Payload {
   action?: string;
   installation?: { id: number };
-  repository?: { id: number; full_name: string; private?: boolean; owner?: { login: string } };
+  repository?: { id: number; full_name: string; private?: boolean; owner?: { login: string }; default_branch?: string };
   sender?: { login: string; type: string };
   issue?: { number: number; pull_request?: unknown; state: string; author_association?: string };
-  comment?: { id: number; body: string; user: { type: string }; author_association?: string };
-  pull_request?: { number: number; draft: boolean; author_association?: string };
+  comment?: { id: number; body: string; user: { type: string }; author_association?: string; in_reply_to_id?: number };
+  pull_request?: { number: number; draft: boolean; state?: string; author_association?: string };
   label?: { name: string };
 }
 
@@ -74,6 +75,19 @@ export function classify(event: string, payload: Payload, botLogin: string, tidy
     const followUp = payload.action === "synchronize" ? { followUp: true } : {};
     return { ...base, kind: "review", number: payload.pull_request.number, ...followUp, maybeMaintainer: maybe(payload.pull_request.author_association) };
   }
+  // A reply in a review thread; the Worker then checks that tidy started the thread.
+  if (event === "pull_request_review_comment" && payload.action === "created" && payload.pull_request && payload.comment?.in_reply_to_id) {
+    if (ours || payload.sender.type === "Bot" || payload.comment.user.type === "Bot") return null;
+    if (payload.pull_request.state !== "open") return null;
+    return {
+      ...base,
+      kind: "thread",
+      number: payload.pull_request.number,
+      commentId: payload.comment.id,
+      thread: payload.comment.in_reply_to_id,
+      maybeMaintainer: maybe(payload.comment.author_association),
+    };
+  }
   return null;
 }
 
@@ -106,13 +120,40 @@ export function countersFor(match: Match, limits: RunLimits, day: string): { key
   return counters;
 }
 
+/** Why a reply in a review thread gets no answer, given the repository's `review.thread_replies`. */
+export function threadReplyRefusal(mode: ThreadReplies, trusted: boolean): string | null {
+  if (mode === "off") return "thread replies are off";
+  if (mode === "maintainers" && !trusted) return "thread replies need write access";
+  return null;
+}
+
+// Checked here, not only in the gate, so replies in other people's threads use up no runs.
+async function threadRefusal(app: AppRecord, payload: Payload, match: Match, settings: Settings, botLogin: string): Promise<string | null> {
+  const { token } = await installationToken(app, payload.installation!.id, { contents: "read", pull_requests: "read" }, [match.repoId]);
+  const root = await github<{ user: { login: string } | null }>(`/repos/${match.repo}/pulls/comments/${match.thread}`, { token }).catch(() => null);
+  if (root?.user?.login !== botLogin) return "not a thread tidy started";
+  let mode = settings.thread_replies;
+  const branch = payload.repository?.default_branch;
+  if (branch) {
+    const text = await github<string>(`/repos/${match.repo}/contents/.github/tidy.yml?ref=${encodeURIComponent(branch)}`, {
+      token,
+      accept: "application/vnd.github.raw",
+    }).catch(() => null);
+    if (text !== null) mode = repoThreadReplies(text) ?? mode;
+  }
+  return threadReplyRefusal(mode, match.trusted);
+}
+
 // A 👀 right away tells people tidy saw the event; the run swaps it for 🚀 or 😕 when it ends.
 async function acknowledge(app: AppRecord, dispatch: Dispatch): Promise<number | undefined> {
   try {
     const token = await installationToken(app, dispatch.installationId, { issues: "write", pull_requests: "write" }, [dispatch.repoId]);
-    const subject = dispatch.commentId
-      ? `/repos/${dispatch.repo}/issues/comments/${dispatch.commentId}/reactions`
-      : `/repos/${dispatch.repo}/issues/${dispatch.number}/reactions`;
+    const subject =
+      dispatch.kind === "thread"
+        ? `/repos/${dispatch.repo}/pulls/comments/${dispatch.commentId}/reactions`
+        : dispatch.commentId
+          ? `/repos/${dispatch.repo}/issues/comments/${dispatch.commentId}/reactions`
+          : `/repos/${dispatch.repo}/issues/${dispatch.number}/reactions`;
     const reaction = await github<{ id: number }>(subject, { token: token.token, method: "POST", body: { content: "eyes" } });
     return reaction.id;
   } catch (error) {
@@ -144,6 +185,7 @@ export async function loadSettings(instance: Instance, repo: Required<Instance["
   let settings: Settings = settingsCache?.settings ?? {
     limits: DEFAULT_LIMITS,
     access: { allowed_owners: [], private_repos: false },
+    thread_replies: "maintainers",
     tidyIsPublic: true,
     loaded: false,
   };
@@ -215,6 +257,10 @@ export async function handleWebhook(request: Request, env: Env, origin: string):
   if (!match.trusted && match.maybeMaintainer) match.trusted = await canWrite(instance.app, payload.installation!.id, match.repo, match.repoId, match.sender);
   // Commands are for maintainers; checking here keeps others from using up runs.
   if (match.kind === "command" && !match.trusted) return new Response("skipped: commands need write access", { status: 202 });
+  if (match.kind === "thread") {
+    const why = await threadRefusal(instance.app, payload, match, settings, `${instance.app.slug}[bot]`);
+    if (why) return new Response(`skipped: ${why}`, { status: 202 });
+  }
   const state = stateOf(env);
   const delivery = request.headers.get("x-github-delivery") ?? crypto.randomUUID();
   const admitted = await state.admit(delivery, countersFor(match, settings.limits, new Date().toISOString().slice(0, 10)), 2 * 86_400_000);
@@ -228,6 +274,7 @@ export async function handleWebhook(request: Request, env: Env, origin: string):
     number: match.number,
     installationId: payload.installation!.id,
     ...(match.commentId ? { commentId: match.commentId } : {}),
+    ...(match.thread ? { thread: match.thread } : {}),
     ...(match.followUp ? { followUp: true } : {}),
     ...(match.requested ? { requested: true } : {}),
   };
@@ -239,7 +286,15 @@ export async function handleWebhook(request: Request, env: Env, origin: string):
     method: "POST",
     body: {
       event_type: "tidy",
-      client_payload: { dispatch_id: dispatchId, worker: origin, kind: record.kind, repo: record.repo, number: record.number },
+      client_payload: {
+        dispatch_id: dispatchId,
+        worker: origin,
+        kind: record.kind,
+        repo: record.repo,
+        number: record.number,
+        // Lets replies in different threads of one pull request run side by side.
+        ...(record.thread ? { thread: record.thread } : {}),
+      },
     },
   });
   return new Response("dispatched", { status: 202 });

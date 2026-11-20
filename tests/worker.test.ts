@@ -5,7 +5,7 @@ import { decrypt, deriveKeys, encrypt, signValue, verifyValue } from "../worker/
 import { keyName } from "../worker/admin";
 import { appJwt, pkcs1ToPkcs8 } from "../worker/github";
 import { isSameOrigin, page } from "../worker/html";
-import { classify, countersFor, refusal, signatureMatches } from "../worker/webhook";
+import { classify, countersFor, refusal, signatureMatches, threadReplyRefusal } from "../worker/webhook";
 
 const master = b64url(crypto.getRandomValues(new Uint8Array(32)));
 
@@ -204,6 +204,39 @@ describe("webhooks", () => {
     expect(classify("pull_request", { ...ownPr, sender: { login: "renovate[bot]", type: "Bot" } }, bot, "alice/tidy")).toBeNull();
     const ownComment = { ...base, action: "created", sender: { login: bot, type: "Bot" }, issue: { number: 3, state: "open" }, comment: { id: 1, body: "@tidy fix", user: { type: "Bot" } } };
     expect(classify("issue_comment", ownComment, bot, "alice/tidy")).toBeNull();
+  });
+
+  test("a reply in a review thread asks tidy to answer there; new threads and bots do not", () => {
+    const reply = (sender: { login: string; type: string }, comment: object, state = "open") =>
+      classify(
+        "pull_request_review_comment",
+        { ...base, action: "created", sender, pull_request: { number: 4, draft: false, state }, comment: { id: 21, body: "Not needed here.", user: sender, ...comment } },
+        bot,
+        "alice/tidy",
+      );
+    expect(reply(human, { in_reply_to_id: 20, author_association: "NONE" })).toMatchObject({
+      kind: "thread",
+      number: 4,
+      commentId: 21,
+      thread: 20,
+      trusted: false,
+      maybeMaintainer: false,
+    });
+    expect(reply(human, { in_reply_to_id: 20, author_association: "MEMBER" })).toMatchObject({ maybeMaintainer: true });
+    expect(reply(human, {})).toBeNull();
+    expect(reply(human, { in_reply_to_id: 20 }, "closed")).toBeNull();
+    expect(reply({ login: bot, type: "Bot" }, { in_reply_to_id: 20 })).toBeNull();
+    expect(reply({ login: "coderabbit[bot]", type: "Bot" }, { in_reply_to_id: 20 })).toBeNull();
+  });
+
+  test("thread replies follow review.thread_replies, and outsiders count like other events", () => {
+    expect(threadReplyRefusal("maintainers", true)).toBeNull();
+    expect(threadReplyRefusal("maintainers", false)).toContain("write access");
+    expect(threadReplyRefusal("everyone", false)).toBeNull();
+    expect(threadReplyRefusal("off", true)).toContain("off");
+    const limits = { runs_per_day: 300, runs_per_repo_per_day: 100, outsider_events_per_day: 10, outsider_pushes_per_pr_per_day: 6 };
+    const match = { repo: "alice/app", repoId: 5, kind: "thread" as const, number: 4, commentId: 21, thread: 20, sender: "bob", maybeMaintainer: false, trusted: false };
+    expect(countersFor(match, limits, "2026-11-20").map((c) => c.key)).toContain("person:bob:2026-11-20");
   });
 
   test("ignores ordinary comments, drafts, closed pull requests and the tidy repository itself", () => {

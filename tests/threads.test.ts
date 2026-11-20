@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dropSettled, groupThreads, type InlineComment, renderThreads } from "../scripts/lib/threads";
+import { dropSettled, groupThreads, type InlineComment, renderThreads, replyRefusal } from "../scripts/lib/threads";
 
 const bot = "peepo-review[bot]";
 let next = 1;
@@ -35,6 +35,32 @@ describe("review threads", () => {
     expect(text).toContain("### Comment by tidy (you)");
     expect(text).toContain("### Reply by @alice (maintainer)");
     expect(text).toContain("line 4 of an earlier commit (outdated), resolved state unknown");
+  });
+});
+
+describe("answering a reply", () => {
+  test("tidy answers in its own open threads, at most twice, and never the same reply twice", () => {
+    const root = comment(bot, "Add the selector.");
+    const first = comment("alice", "Not needed.", { in_reply_to_id: root.id });
+    const thread = (...replies: InlineComment[]) => groupThreads([root, ...replies])[0];
+    expect(replyRefusal(thread(first), first, bot)).toBeNull();
+    const answer = comment(bot, "The selector matters because…", { in_reply_to_id: root.id });
+    expect(replyRefusal(thread(first, answer), first, bot)).toContain("already answered this reply");
+    const second = comment("alice", "Still no.", { in_reply_to_id: root.id });
+    expect(replyRefusal(thread(first, answer, second), second, bot)).toBeNull();
+    const concession = comment(bot, "You are right.", { in_reply_to_id: root.id });
+    const third = comment("alice", "Thanks.", { in_reply_to_id: root.id });
+    expect(replyRefusal(thread(first, answer, second, concession, third), third, bot)).toContain("2 times");
+  });
+
+  test("threads someone else started, or that are resolved, get no answer", () => {
+    const human = comment("bob", "Why this name?");
+    const reply = comment("alice", "Legacy.", { in_reply_to_id: human.id });
+    expect(replyRefusal(groupThreads([human, reply])[0], reply, bot)).toContain("did not start");
+    const root = comment(bot, "Add the selector.");
+    const answer = comment("alice", "Done.", { in_reply_to_id: root.id });
+    const resolved = groupThreads([root, answer], new Map([[root.id, { id: "T", resolved: true }]]))[0];
+    expect(replyRefusal(resolved, answer, bot)).toContain("resolved");
   });
 });
 
