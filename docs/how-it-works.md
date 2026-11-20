@@ -65,6 +65,10 @@ someone without write access gets at most `review.max_auto_reviews` automatic re
 `limits.outsider_pushes_per_pr_per_day` follow-ups a day; after that a maintainer can comment
 `@tidy review`. Maintainers' pull requests have no such caps.
 
+Every review reads the inline review threads too: tidy's earlier comments, the replies to them, and
+whether each thread is resolved. If a maintainer declined a finding with a reason, or resolved its
+thread, tidy does not raise it again unless new code changes the situation.
+
 ## Commands
 
 Comment on an issue or pull request. Only people with write access can run commands.

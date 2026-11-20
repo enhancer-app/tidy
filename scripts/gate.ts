@@ -7,6 +7,7 @@ import { requestCredentials } from "./lib/credentials";
 import { canWrite, client, GitHubError, type GitHubClient } from "./lib/github";
 import { withoutCode } from "./lib/sanitize";
 import { fetchSource } from "./lib/source";
+import { groupThreads, type InlineComment, renderThreads, threadStates } from "./lib/threads";
 import { PENDING, secretWorkflows } from "./lib/workflows";
 
 export type Task = "triage" | "review" | "publish" | "none";
@@ -213,6 +214,12 @@ async function main() {
     const authorIsMaintainer = roles.get(pr.user.login) === "maintainer";
     if (!asked && !authorIsMaintainer) await checkLimit(gh, repo, "pr", pr.user.login, config);
     fork = pr.head.repo?.full_name !== repo;
+    const inline = await gh.paginate<InlineComment>(`/repos/${repo}/pulls/${target.number}/comments`, 1000);
+    for (const login of new Set(inline.map((c) => c.user?.login ?? ""))) {
+      if (login && !roles.has(login)) roles.set(login, (await isWriter(login)) ? "maintainer" : "outside contributor");
+    }
+    const threads = groupThreads(inline, await threadStates(gh, repo, target.number, notice));
+    writeFileSync(join(out, "review-threads.md"), renderThreads(threads, bot, (login) => roles.get(login) ?? "outside contributor"));
     let diffPath = `/repos/${repo}/pulls/${target.number}`;
     // Re-adding the tidy:review label must not buy another full review of a commit tidy already reviewed.
     if (target.requested) {
@@ -221,7 +228,7 @@ async function main() {
     }
     if (target.follow_up) {
       if (!config.review.on_push) stop("reviews on push are turned off in .github/tidy.yml");
-      const reviews = await gh.paginate<{ user: { login: string } | null; commit_id: string; body: string }>(
+      const reviews = await gh.paginate<{ id: number; user: { login: string } | null; commit_id: string; body: string }>(
         `/repos/${repo}/pulls/${target.number}/reviews`,
       );
       const ours = reviews.filter((r) => r.user?.login === credentials.bot.login);
@@ -240,7 +247,9 @@ async function main() {
         if (compare.status === "ahead") {
           followUp = true;
           diffPath = `/repos/${repo}/compare/${previous.commit_id}...${pr.head.sha}`;
-          writeFileSync(join(out, "previous.md"), previous.body.slice(0, 50_000));
+          const own = inline.filter((c) => c.pull_request_review_id === previous.id && !c.in_reply_to_id);
+          const notes = own.map((c) => `### \`${c.path}\` line ${c.line ?? c.original_line ?? "?"}\n\n${c.body}`).join("\n\n");
+          writeFileSync(join(out, "previous.md"), `${previous.body}${notes ? `\n\n## Inline comments of that review\n\n${notes}` : ""}`.slice(0, 50_000));
         }
       }
     }

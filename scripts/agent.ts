@@ -78,7 +78,7 @@ function prepareSandbox(step: Step): { work: string; stash: string } {
     if (removed.length) console.log(`Removed ${removed.length} symlinks that point outside the repository`);
   }
   for (const name of PROJECT_CONFIG) if (existsSync(join(work, name))) renameSync(join(work, name), join(stash, name));
-  for (const name of ["thread.md", "diff.patch", "previous.md"]) if (existsSync(join(context, name))) cpSync(join(context, name), join(sandbox, "context", name));
+  for (const name of ["thread.md", "diff.patch", "previous.md", "review-threads.md"]) if (existsSync(join(context, name))) cpSync(join(context, name), join(sandbox, "context", name));
   const checks = join(temp, "checks", "checks.md");
   if (step.task === "review") writeFileSync(join(sandbox, "context", "checks.md"), existsSync(checks) ? readFileSync(checks) : "No checks are configured.\n");
   writeFileSync(join(sandbox, "context", "prompt.md"), prompt(step));
