@@ -27,6 +27,10 @@ const resultDir = join(temp, "result");
 // plan.yml sets LIVE: the planning model may try interactive extras in containers on this runner.
 const live = job === "plan" && process.env.LIVE === "true";
 const liveDir = join(temp, "live");
+// Outside liveDir, so no extra's folders can end up in the agent container's mount.
+const bridgeDir = join(temp, "live-bridge");
+// All live setups share this, so plan.yml's 60 minutes cover them and the agent's own timeout.
+const LIVE_SETUP_BUDGET = 15 * 60_000;
 const uid = process.getuid?.() ?? 1000;
 const gid = process.getgid?.() ?? 1000;
 /** Why each interactive extra has no live container, shown to the model. */
@@ -88,7 +92,9 @@ function describeExtra(extra: Extra): string {
 /** Starts a live container per interactive extra, before any key is on this runner. */
 async function openLive(): Promise<Live[]> {
   const opened: Live[] = [];
-  for (const extra of meta.config.review.extras.filter((e) => e.interactive && meta.extras.includes(e.name))) {
+  const interactive = meta.config.review.extras.filter((e) => e.interactive && meta.extras.includes(e.name));
+  const deadline = Date.now() + LIVE_SETUP_BUDGET;
+  for (const extra of interactive) {
     const slug = extraSlug(extra.name);
     const work = join(liveDir, slug, "work");
     const out = join(liveDir, slug, "out");
@@ -97,8 +103,9 @@ async function openLive(): Promise<Live[]> {
     const options = {
       name: `tidy-live-${slug}`, image: extra.image, work, out, side: "after" as const,
       user: `${uid}:${gid}`, network: extra.interactive!.network, start: extra.interactive!.start,
+      memory: interactive.length > 1 ? "3g" : "6g",
     };
-    const { session, error, log } = await openSession(extra, options, 10 * 60_000);
+    const { session, error, log } = await openSession(extra, options, deadline);
     process.stdout.write(log);
     if (error) {
       console.error(`Live container for ${extra.name}: ${error}`);
@@ -146,11 +153,12 @@ async function runContainer(step: Step, work: string): Promise<string> {
   ].join("\n");
   const readOnly = step.task === "fix" ? "" : ":ro";
   // Only the folder with the bridge socket, never the live containers' own folders.
-  const liveMounts = live ? ["-v", `${join(liveDir, "bridge")}:${LIVE_DIR}`, "-v", `${resolve(env("TIDY_ROOT"), "scripts", "live-shim.mjs")}:${LIVE_SHIM}:ro`] : [];
+  const liveMounts = live ? ["-v", `${bridgeDir}:${LIVE_DIR}`, "-v", `${resolve(env("TIDY_ROOT"), "scripts", "live-shim.mjs")}:${LIVE_SHIM}:ro`] : [];
+  const name = `tidy-agent-${process.pid}-${step.task}`;
   try {
     const result = await docker(
       [
-        "run", "--rm", "--init",
+        "run", "--rm", "--init", "--name", name,
         "--user", `${uid}:${gid}`,
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--pids-limit", "2048", "--memory", "8g",
@@ -173,6 +181,8 @@ async function runContainer(step: Step, work: string): Promise<string> {
     else if (result.code !== 0) console.error(`Agent container exited with ${result.code}`);
     return result.output;
   } finally {
+    // Killing the docker client at the time limit does not always stop the container, which holds the key.
+    await docker(["rm", "-f", name], 60_000);
     rmSync(keyFile, { force: true });
   }
 }
@@ -331,9 +341,8 @@ async function main() {
 }
 
 async function listenBridge(opened: Live[]) {
-  const dir = join(liveDir, "bridge");
-  mkdirSync(dir, { recursive: true });
-  return new Bridge(opened, keys).listen(join(dir, "bridge.sock"));
+  mkdirSync(bridgeDir, { recursive: true });
+  return new Bridge(opened, keys).listen(join(bridgeDir, "bridge.sock"));
 }
 
 await main();

@@ -44,6 +44,7 @@ jobs:
       task: issue
       model: ${{ needs.gate.outputs.triage-model }}
       shell: ${{ needs.gate.outputs.trusted == 'true' }}
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
 
   # Picks the arguments for the repository's review extras, such as the steps of a demo recording.
   plan:
@@ -56,6 +57,7 @@ jobs:
     with:
       task: plan
       model: ${{ needs.gate.outputs.review-model }}
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
 
   # The same with live containers for interactive extras, in a file that only gets the planning key.
   plan-live:
@@ -67,6 +69,7 @@ jobs:
       id-token: write
     with:
       model: ${{ needs.gate.outputs.review-model }}
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
 
   checks:
     needs: [gate, plan, plan-live]
@@ -74,6 +77,8 @@ jobs:
     uses: ./.github/workflows/checks.yml
     permissions:
       contents: read
+    with:
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
 
   review:
     needs: [gate, checks]
@@ -86,6 +91,7 @@ jobs:
     with:
       task: review
       model: ${{ needs.gate.outputs.review-model }}
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
 
   publish:
     needs: [gate, announce, issue, review]
@@ -102,3 +108,5 @@ jobs:
       approver: ${{ needs.gate.outputs.approver }}
       proposal: ${{ needs.gate.outputs.proposal }}
       failed: ${{ contains(needs.*.result, 'failure') }}
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
+      result-artifact: ${{ needs.review.outputs.result-artifact || needs.issue.outputs.result-artifact }}

@@ -60,24 +60,36 @@ export interface SessionOptions {
   user: string;
   network: boolean;
   start: string[];
+  /** Docker's --memory, lower when several sessions share the runner. */
+  memory: string;
+}
+
+// A bridge network without inter-container traffic, so pull request code cannot reach the agent container.
+export const EXTRAS_NETWORK = "tidy-extras";
+
+async function ensureNetwork(): Promise<void> {
+  if ((await docker(["network", "inspect", EXTRAS_NETWORK], 30_000)).code === 0) return;
+  const run = await docker(["network", "create", "-o", "com.docker.network.bridge.enable_icc=false", EXTRAS_NETWORK], 30_000);
+  if (run.code !== 0) throw new Error(`Could not create the ${EXTRAS_NETWORK} network: ${run.output}`);
 }
 
 export class Session {
   constructor(readonly options: SessionOptions) {}
 
-  start(): Promise<Run> {
+  async start(timeoutMs: number): Promise<Run> {
     const o = this.options;
+    await ensureNetwork();
     return docker(
       [
-        "run", "-d", "--init", "--name", o.name,
+        "run", "-d", "--init", "--name", o.name, "--network", EXTRAS_NETWORK,
         "--cap-drop", "ALL", ...SETUP_CAPS.flatMap((cap) => ["--cap-add", cap]),
-        "--security-opt", "no-new-privileges", "--pids-limit", "1024", "--memory", "6g",
+        "--security-opt", "no-new-privileges", "--pids-limit", "1024", "--memory", o.memory,
         "-e", "CI=true", "-e", `TIDY_SIDE=${o.side}`,
         ...(o.base ? ["-e", "TIDY_BASE=/base", "-v", `${o.base}:/base`] : []),
         "-v", `${o.work}:/work`, "-v", `${o.out}:/out`, "-w", "/work",
         "--entrypoint", "sleep", o.image, "infinity",
       ],
-      10 * 60_000,
+      timeoutMs,
     );
   }
 
@@ -136,18 +148,25 @@ export class Session {
   }
 }
 
-/** Starts a session and runs setup; on failure the container is removed and the reason returned. */
-export async function openSession(extra: Extra, options: SessionOptions, setupMs: number): Promise<{ session: Session; error?: string; log: string }> {
+/** Starts a session and runs setup by `deadline`; on failure the container is removed and the reason returned. */
+export async function openSession(extra: Extra, options: SessionOptions, deadline: number): Promise<{ session: Session; error?: string; log: string }> {
   const session = new Session(options);
-  const started = await session.start();
+  const left = () => Math.max(deadline - Date.now(), 1_000);
+  const started = await session.start(left()).catch((error: Error) => ({ code: 1, output: error.message }));
   if (started.code !== 0) {
     await session.stop();
     return { session, error: "the container did not start", log: started.output };
   }
-  const setup = await session.setup(extra.setup, setupMs);
+  const setup = await session.setup(extra.setup, left());
   if (setup.code !== 0) {
     await session.stop();
     return { session, error: setup.code === null ? "setup timed out" : `setup exited with ${setup.code}`, log: setup.output };
+  }
+  // Setup ran pull request code as root; a restart ends anything it left running in the background.
+  const reset = await docker(["restart", "-t", "1", options.name], 60_000);
+  if (reset.code !== 0) {
+    await session.stop();
+    return { session, error: "the container did not restart after setup", log: `${setup.output}\n${reset.output}` };
   }
   try {
     await session.handOver();

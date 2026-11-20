@@ -134,6 +134,19 @@ describe("bridge", () => {
   });
 });
 
+describe("artifacts", () => {
+  test("jobs read the gate's snapshot and the agent's result by ID, by name only from an earlier run", () => {
+    type Step = { uses?: string; with?: Record<string, string> };
+    for (const file of ["agent.yml", "plan.yml", "checks.yml", "publish.yml"]) {
+      const workflow = Bun.YAML.parse(readFileSync(join(import.meta.dir, "..", ".github", "workflows", file), "utf8")) as { jobs: Record<string, { steps: Step[] }> };
+      const downloads = Object.values(workflow.jobs).flatMap((job) => job.steps).filter((step) => step.uses?.startsWith("actions/download-artifact"));
+      for (const step of downloads) {
+        if (["context", "result-issue", "result-review"].includes(step.with?.name ?? "")) expect(step.with?.["run-id"]).toBe("${{ inputs.source-run }}");
+      }
+    }
+  });
+});
+
 describe("OpenCode policy for live planning", () => {
   const config = (task: "plan" | "review", live: boolean) => sandboxConfig(task, false, live) as { policies: { action: string; resource: string; effect: string }[]; mcp?: { servers: Record<string, { command: string[] }> } };
   // OpenCode lets the last matching statement win.

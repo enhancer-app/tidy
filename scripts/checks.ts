@@ -70,8 +70,11 @@ function runCommand(extra: Extra, args: string[], side: Side, dir: string, base:
 async function replay(extra: Extra, steps: Step[], side: Side, dir: string, base: string | undefined, target: string) {
   const { session, error, log } = await openSession(
     extra,
-    { name: `tidy-replay-${extraSlug(extra.name)}-${side}`, image: extra.image, work: dir, out: target, base, side, user, network: extra.interactive!.network, start: extra.interactive!.start },
-    Math.max(left(), 1),
+    {
+      name: `tidy-replay-${extraSlug(extra.name)}-${side}`, image: extra.image, work: dir, out: target, base, side, user,
+      network: extra.interactive!.network, start: extra.interactive!.start, memory: "8g",
+    },
+    started + BUDGET,
   );
   if (error) return { status: `${error}: error`, outcome: "error" as const, log: block(tail(log, MAX_OUTPUT)) };
   const codes: (number | null)[] = [];

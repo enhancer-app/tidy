@@ -211,6 +211,11 @@ async function updateKey(form: FormData, env: Env, instance: Instance, current: 
   if (op === "set") {
     const value = String(form.get("value") ?? "").trim();
     if (!value || value.length > 4096 || /\s/.test(value)) return page("Invalid key", "<p>The key is empty or malformed.</p>", { status: 400 });
+    const other = plan ? instance.keys : (instance.planKeys ?? {});
+    // The same key in both groups would hand plan.yml the agent's key and undo the separation.
+    if (Object.values(other).some((key) => key.value === value)) {
+      return page("Key already in use", "<p>This key is already saved in the other group. Use a separate key for planning.</p>", { status: 400 });
+    }
     keys[name] = { value, updated: new Date().toISOString(), by: current.login };
   } else if (op === "delete") {
     delete keys[name];
