@@ -52,16 +52,22 @@ jobs:
           path: ${{ runner.temp }}
           run-id: ${{ inputs.source-run || github.run_id }}
           github-token: ${{ github.token }}
-      # Skipped tasks leave no result; publish.ts then has nothing to do.
+      # Skipped tasks leave no result; publish.ts then has nothing to do. Exact names, not a pattern, so an
+      # extra artifact uploaded from another job cannot be merged over the real result.
       - if: ${{ inputs.announce == '' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         continue-on-error: true
         with:
-          pattern: result-*
-          merge-multiple: true
+          name: result-issue
           path: ${{ runner.temp }}/result
           run-id: ${{ inputs.source-run || github.run_id }}
           github-token: ${{ github.token }}
+      - if: ${{ inputs.announce == '' && inputs.source-run == '' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: result-review
+          path: ${{ runner.temp }}/result
       # Files written by review extras, such as demo GIFs, to attach to the review.
       - if: ${{ inputs.announce == '' }}
         continue-on-error: true

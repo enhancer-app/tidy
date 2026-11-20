@@ -27,6 +27,8 @@ export interface Meta {
   followUp: boolean;
   /** Names of the review extras whose `when` globs match this pull request. */
   extras: string[];
+  /** The commit the extras' Before side runs on: where the pull request branched off the default branch. */
+  extrasBase: string;
   config: Config;
 }
 
@@ -183,6 +185,7 @@ async function main() {
   let fork = false;
   let risky: string[] = [];
   let extras: string[] = [];
+  let extrasBase = "";
   let followUp = false;
 
   if (task === "triage") {
@@ -261,8 +264,14 @@ async function main() {
     const extrasAllowed = authorIsMaintainer || asked;
     if (!extrasAllowed && config.review.extras.length) notice("review extras are skipped for pull requests from people without write access");
     if (extrasAllowed) extras = config.review.extras.filter((extra) => changed.some((file) => extra.when.some((glob) => matchesGlob(file, glob)))).map((e) => e.name);
-    // Extras run on the base branch too, for a before and after.
-    if (extras.length) fetchSource(repo, `refs/heads/${info.default_branch}`, credentials.token!, { gitDir: join(out, "base.git"), workTree: join(out, "base") });
+    // Extras run on the base too, for a before and after. The merge base keeps unrelated newer commits out of Before.
+    if (extras.length) {
+      const compare = await gh
+        .request<{ merge_base_commit: { sha: string } }>(`/repos/${repo}/compare/${encodeURIComponent(info.default_branch)}...${pr.head.sha}`)
+        .catch(() => null);
+      const ref = compare?.merge_base_commit.sha ?? `refs/heads/${info.default_branch}`;
+      extrasBase = fetchSource(repo, ref, credentials.token!, { gitDir: join(out, "base.git"), workTree: join(out, "base") });
+    }
   }
 
   const meta: Meta = {
@@ -277,6 +286,7 @@ async function main() {
     fork,
     secretWorkflows: risky,
     extras,
+    extrasBase,
     followUp,
     config,
   };
