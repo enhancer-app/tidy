@@ -74,10 +74,11 @@ review:
         network: false                              # the default
 ```
 
-1. Before the model gets its key, tidy starts the container, runs `setup` as root with the network,
-   restarts the container so nothing from `setup` keeps running, gives `/work` and `/out` to an
-   unprivileged user, disconnects every network and starts `start`. Setup for all interactive extras
-   shares 15 minutes.
+1. Before the model gets its key, tidy runs `setup` as root with the network in one container, gives
+   `/work` and `/out` to an unprivileged user and saves the container as an image. The steps run in a
+   new container from that image, which starts as that user, with no capabilities and no network, so
+   nothing `setup` left behind runs as root. Then tidy starts `start`. Setup for all interactive
+   extras shares 15 minutes.
 2. The model calls a step by name and adds arguments. tidy runs the declared command with those
    arguments, as the unprivileged user without capabilities, and returns the exit code and the last
    8,000 characters of output. It has no shell, at most 60 calls and 60 seconds per step.
@@ -95,8 +96,11 @@ that blocks until text appears, replay better than fixed pauses.
 Interactive extras need a **planning key** in `/admin`, separate from the model keys; `/admin` refuses
 a key that is already saved as a model key. The live container runs pull request code on the same
 machine as the model, so a container escape could leak the planning key. The model keys never reach
-that machine. Give the planning key a low spending limit at the provider. Without one, interactive
-extras are skipped.
+that machine. Give the planning key a low spending limit at the provider, and make it a key for the
+provider of `review.model`, which plans the extras. Without one, every extra of a pull request that
+matches an interactive extra is skipped, the plain ones too, because they are planned together.
+A step that fails because its container stopped, for example after running out of memory, counts as
+a broken run, not as a failed check.
 
 ### `before`
 

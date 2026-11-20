@@ -71,6 +71,11 @@ export class Bridge {
   }
 
   async call(name: unknown, input: unknown): Promise<{ text: string; isError: boolean }> {
+    const reply = await this.run(name, input);
+    return leaksKey(reply.text, this.keys) ? { text: "The output was withheld because it contained a model key.", isError: true } : reply;
+  }
+
+  private async run(name: unknown, input: unknown): Promise<{ text: string; isError: boolean }> {
     const fail = (text: string) => ({ text, isError: true });
     if (++this.calls > LIMITS.calls) return fail(`The limit of ${LIMITS.calls} calls is used up. Write your result now.`);
     if (leaksKey(JSON.stringify(input ?? null), this.keys)) return fail("Refused: the call contained a model key.");
@@ -98,7 +103,7 @@ export class Bridge {
     } else {
       return fail("Unknown tool.");
     }
-    return leaksKey(text, this.keys) ? fail("The output was withheld because it contained a model key.") : { text, isError: false };
+    return { text, isError: false };
   }
 
   /** One JSON request per line; requests run one at a time, in order. */

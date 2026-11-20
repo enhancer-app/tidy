@@ -92,6 +92,13 @@ describe("bridge", () => {
     expect(reply.text).not.toContain(KEY);
   });
 
+  test("every reply is filtered, including a failed restart", async () => {
+    const session = { restart: async () => ({ code: 1, output: `docker said ${KEY}` }) } as unknown as Session;
+    const reply = await new Bridge([{ extra: extra(), session }], { KEY }).call("restart", { extra: "Demo" });
+    expect(reply).toMatchObject({ isError: true });
+    expect(reply.text).not.toContain(KEY);
+  });
+
   test("stops after the call limit", async () => {
     const { session } = fakeSession();
     const bridge = new Bridge([{ extra: extra(), session }], { KEY });

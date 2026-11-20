@@ -6,8 +6,8 @@ export interface Verdict {
   before: Outcome;
 }
 
-// Enough for apt and package managers running as root; container escapes usually need more.
-export const SETUP_CAPS = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID"];
+// Enough for apt, package managers and servers on low ports running as root; container escapes usually need more.
+export const SETUP_CAPS = ["CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "NET_BIND_SERVICE", "SETGID", "SETUID"];
 
 export const extraSlug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
