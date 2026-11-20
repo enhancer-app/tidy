@@ -46,6 +46,10 @@ tidy assumes the model can be talked into anything, and limits what it can do in
   checked-out code that point outside the repository are removed first, so a pull request cannot reach
   those files through a link. tidy discards any result or patch that contains a configured key, and
   `/admin` refuses key names such as `PATH` or `NODE_OPTIONS` that would change how the agent runs.
+- **Replies are arguments, not orders.** Review threads reach the model marked as untrusted, with each
+  author's access. Only a maintainer's reply or a resolved thread stops tidy from repeating a finding,
+  and `publish.yml` enforces that itself. A thread reply can only post one answer in that thread and
+  resolve it; tidy answers at most twice per thread, and by default only maintainers' replies.
 - **Abuse limits.** People without write access get a few events a day, a few follow-up reviews per
   pull request, at most two issues or pull requests handled a day, and their commands are ignored. The
   Worker checks real write access through the API, because GitHub marks every organization member as
