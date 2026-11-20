@@ -5,7 +5,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync }
 import { basename, extname, join } from "node:path";
 import { clientPayload, env, notice } from "./lib/actions";
 import { type Credentials, requestCredentials, type Target } from "./lib/credentials";
-import { client, GitHubError, type GitHubClient } from "./lib/github";
+import { canWrite, client, GitHubError, type GitHubClient } from "./lib/github";
 import { applyPatch, git } from "./lib/patch";
 import { ASSETS_BRANCH, storeAssets } from "./lib/assets";
 import { commitMessage, thanks } from "./lib/attribution";
@@ -14,6 +14,7 @@ import { commentableLines, renderReview, type Review, validateReview, VERDICTS, 
 import { sanitize, singleLine } from "./lib/sanitize";
 import { fetchSource } from "./lib/source";
 import { statusComment, type StatusComment } from "./lib/status";
+import { dropSettled, groupThreads, type InlineComment, threadStates } from "./lib/threads";
 import type { Meta } from "./gate";
 
 const temp = env("RUNNER_TEMP");
@@ -224,7 +225,26 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
     .join("\n\n");
 }
 
-async function postReview(gh: GitHubClient, meta: Meta, review: Review) {
+// The prompt asks the model not to repeat declined findings; this holds even when it does.
+async function withoutRepeats(gh: GitHubClient, meta: Meta, bot: string, comments: Review["comments"]): Promise<Review["comments"]> {
+  if (!comments.length) return comments;
+  try {
+    const inline = await gh.paginate<InlineComment>(`/repos/${meta.repo}/pulls/${meta.number}/comments`, 1000);
+    const threads = groupThreads(inline, await threadStates(gh, meta.repo, meta.number, notice));
+    const repliers = new Set(threads.filter((t) => t.root.user?.login === bot).flatMap((t) => t.replies.map((r) => r.user?.login ?? "")));
+    const maintainers = new Set<string>();
+    for (const login of repliers) if (login && login !== bot && (await canWrite(gh, meta.repo, login))) maintainers.add(login);
+    const { kept, dropped } = dropSettled(comments, threads, bot, maintainers);
+    for (const c of dropped) notice(`Skipped the inline comment on ${c.path}:${c.line}: it repeats a review thread a maintainer answered or resolved`);
+    return kept;
+  } catch (error) {
+    notice(`Could not compare with earlier review threads: ${(error as Error).message}`);
+    return comments;
+  }
+}
+
+async function postReview(gh: GitHubClient, meta: Meta, bot: string, review: Review) {
+  review = { ...review, comments: await withoutRepeats(gh, meta, bot, review.comments) };
   const pr = await gh.request<{ head: { sha: string } }>(`/repos/${meta.repo}/pulls/${meta.number}`);
   const stale = pr.head.sha !== meta.base;
   const extras = await extrasSection(gh, meta);
@@ -300,7 +320,7 @@ async function publish(gh: GitHubClient, credentials: Credentials): Promise<Outc
     await status.remove().catch((error: Error) => notice(`Could not remove the status comment: ${error.message}`));
   } else if (result.type === "review") {
     if (meta.task !== "review") throw new Error("Review result for a non-review dispatch");
-    await postReview(gh, meta, validateReview(result, readFileSync(join(temp, "context", "diff.patch"), "utf8")));
+    await postReview(gh, meta, credentials.bot.login, validateReview(result, readFileSync(join(temp, "context", "diff.patch"), "utf8")));
   } else if (result.type === "pr") {
     if (meta.task !== "triage") throw new Error("Pull request result for a non-issue dispatch");
     if (process.env.APPROVER && target.kind !== "command") throw new Error("Approval needs a @tidy publish command");

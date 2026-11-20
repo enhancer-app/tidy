@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { groupThreads, type InlineComment, renderThreads } from "../scripts/lib/threads";
+import { dropSettled, groupThreads, type InlineComment, renderThreads } from "../scripts/lib/threads";
 
 const bot = "peepo-review[bot]";
 let next = 1;
@@ -35,5 +35,39 @@ describe("review threads", () => {
     expect(text).toContain("### Comment by tidy (you)");
     expect(text).toContain("### Reply by @alice (maintainer)");
     expect(text).toContain("line 4 of an earlier commit (outdated), resolved state unknown");
+  });
+});
+
+describe("repeated findings", () => {
+  const maintainers = new Set(["alice"]);
+  const suggestion = "const SEVENTV_NATIVE_CHAT_SELECTOR = '.seventv-chat';";
+  const root = comment(bot, `Add the 7TV selector.\n\n\`\`\`suggestion\n${suggestion}\n\`\`\``, { line: 40, original_line: 40 });
+  const declined = (login: string) => groupThreads([root, comment(login, "This does not apply here.", { in_reply_to_id: root.id })]);
+
+  test("a finding a maintainer declined is not posted inline again, even after its line moved", () => {
+    const moved = { path: "src/chat.ts", line: 55, body: "Add the 7TV selector.", suggestion };
+    const near = { path: "src/chat.ts", line: 42, body: "Reworded, same place." };
+    const elsewhere = { path: "src/chat.ts", line: 90, body: "A different problem." };
+    const { kept, dropped } = dropSettled([moved, near, elsewhere], declined("alice"), bot, maintainers);
+    expect(dropped).toEqual([moved, near]);
+    expect(kept).toEqual([elsewhere]);
+  });
+
+  test("an outsider's reply alone does not silence a finding", () => {
+    const again = { path: "src/chat.ts", line: 40, body: "Add the 7TV selector.", suggestion };
+    expect(dropSettled([again], declined("mallory"), bot, maintainers).kept).toEqual([again]);
+  });
+
+  test("a resolved thread counts as settled, but only when tidy started it", () => {
+    const again = { path: "src/chat.ts", line: 40, body: "Still missing." };
+    const resolved = new Map([[root.id, { id: "T", resolved: true }]]);
+    expect(dropSettled([again], groupThreads([root], resolved), bot, maintainers).kept).toEqual([]);
+    const human = comment("alice", "Note to self.", { line: 40 });
+    expect(dropSettled([again], groupThreads([human], new Map([[human.id, { id: "H", resolved: true }]])), bot, maintainers).kept).toEqual([again]);
+  });
+
+  test("the same suggestion on another file is a new finding", () => {
+    const other = { path: "src/other.ts", line: 40, body: "Add the 7TV selector.", suggestion };
+    expect(dropSettled([other], declined("alice"), bot, maintainers).kept).toEqual([other]);
   });
 });
