@@ -48,6 +48,64 @@ total. Images are shown inline; videos are linked.
 
 ![A tidy review with Before and After GIFs](images/review-demo-light.png)
 
+## Interactive extras
+
+With plain arguments the model plans blind: it cannot see whether its demo shows anything. An
+interactive extra gives it a live container instead, with the pull request's code already set up, where
+it can run the steps your tool offers, read their output and try again before anything is recorded:
+
+```yaml
+review:
+  extras:
+    - name: Demo
+      when: ["src/**"]
+      image: node:22-bookworm
+      setup: npm install --global bun && bun install
+      instructions: Show the changed tab bar. AGENTS.md describes the tui script.
+      before: pr-tools
+      interactive:
+        start: ["bun", "run", "tui", "serve"]       # optional, runs in the background
+        steps:                                      # the only commands the model can run
+          screen: ["bun", "run", "tui", "screen"]
+          click: ["bun", "run", "tui", "click"]
+          expect: ["bun", "run", "tui", "expect"]
+          rec-start: ["bun", "run", "tui", "rec", "start", "--out", "{out}/demo.gif"]
+          rec-stop: ["bun", "run", "tui", "rec", "stop"]
+        network: false                              # the default
+```
+
+1. Before the model gets its key, tidy starts the container, runs `setup` as root with the network,
+   gives `/work` and `/out` to an unprivileged user, disconnects every network and starts `start`.
+2. The model calls a step by name and adds arguments. tidy runs the declared command with those
+   arguments, as the unprivileged user without capabilities, and returns the exit code and the last
+   8,000 characters of output. It has no shell, at most 60 calls and 60 seconds per step.
+3. The model hands back the list of steps that shows the change. Files from the live container are
+   thrown away.
+4. In the job without any credentials, tidy replays those steps in a fresh container, on the pull request
+   and on the base, and attaches the files as before. A side is `0` when every step exits with `0`,
+   `1` when a step exits with `1`, and an error otherwise.
+
+Your tool needs `bash` and `timeout` in the image. Steps run without a network unless you set
+`network: true`, so install everything in `setup`. Steps that wait for a condition, such as an `expect`
+that blocks until text appears, replay better than fixed pauses.
+
+Interactive extras need a **planning key** in `/admin`, separate from the model keys. The live
+container runs pull request code on the same machine as the model, so a container escape could leak
+that key, and only that key. Give it a low spending limit at the provider. Without one, interactive
+extras are skipped.
+
+### `before`
+
+By default Before runs on the base checkout with the base branch's own tools, so a step or a fixture
+the pull request adds does not exist there. With `before: pr-tools`, Before runs the pull request's
+checkout (its tools and fixtures) with the base checkout mounted at `/base`, and sets `TIDY_SIDE=before`
+and `TIDY_BASE=/base`. Your tool then runs the product from `/base`; `setup` sees the same variables,
+so it can install the base's dependencies too. This works for plain extras as well.
+
+With `pr-tools` the pull request's code records both sides, so a dishonest pull request could fake
+Before as well as After. The review says which tools recorded Before. Extras show what an honest change
+does; they are not proof against a hostile one.
+
 ## Where the files live
 
 GitHub's attachment upload does not accept App tokens, so tidy keeps these files on a `tidy-assets`
@@ -60,4 +118,6 @@ repositories the images may not show, because raw files there need a login.
 
 [opencode-better-tabs](https://github.com/igorovh/opencode-better-tabs/blob/main/.github/tidy.yml)
 records its tab bar in the real OpenCode TUI. Its `record` script supports `expect`, `expect-not` and
-`expect-above` steps, so a recording fails when the behaviour is wrong, and still writes the GIF.
+`expect-above` steps, so a recording fails when the behaviour is wrong, and still writes the GIF. It must
+exit with `1` for a failed expectation and another code for a broken run, or tidy treats every failure
+as an error.

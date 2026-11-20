@@ -297,6 +297,8 @@ async function main() {
   setOutput("review-model", config.review.model);
   setOutput("checks", String(config.review.checks.length > 0 || extras.length > 0));
   setOutput("extras", String(extras.length > 0));
+  // Interactive extras are planned in plan.yml, which only gets the separate planning key.
+  setOutput("live", String(config.review.extras.some((e) => e.interactive && extras.includes(e.name))));
 }
 
 await main();

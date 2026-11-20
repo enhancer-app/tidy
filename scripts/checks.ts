@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { env } from "./lib/actions";
-import { extraSlug, outcome, SETUP_CAPS, type Verdict } from "./lib/extras";
+import { LIMITS, parseSteps, type Step, stepCommand } from "./lib/bridge";
+import type { Extra } from "./lib/config";
+import { extraSlug, outcome, SETUP_CAPS, stepsOutcome, type Verdict } from "./lib/extras";
+import { openSession, tail, withOut } from "./lib/sandbox";
 import type { Meta } from "./gate";
 
 const MAX_OUTPUT = 15_000;
@@ -49,34 +52,79 @@ for (const command of meta.config.review.checks) {
   sections.push(`## \`${command}\` (${status})\n\n${block(tail)}`);
 }
 
-// Extras need root for their setup (installing packages), so they run as root in a container that
-// still has no secrets and sees only its own checkout and output folder.
+/** Runs a plain extra's command once, as root with the network, so `setup` can install packages. */
+function runCommand(extra: Extra, args: string[], side: Side, dir: string, base: string | undefined, target: string) {
+  const { status, code, tail } = run([
+    // Root may install packages, but without the capabilities a container escape would lean on.
+    "--cap-drop", "ALL", ...SETUP_CAPS.flatMap((cap) => ["--cap-add", cap]),
+    "-e", `TIDY_SIDE=${side}`, ...(base ? ["-e", "TIDY_BASE=/base", "-v", `${base}:/base`] : []),
+    "-v", `${dir}:/work`, "-v", `${target}:/out`, "-w", "/work",
+    extra.image,
+    // The setup line comes from the default branch; the arguments are passed as a list, never parsed by a shell.
+    "bash", "-c", `set -e\n${extra.setup}\nexec "$@"`, "bash", ...withOut(extra.command), ...args,
+  ]);
+  return { status: `${status}: ${outcome(code)}`, outcome: outcome(code), log: `Arguments: ${block(JSON.stringify(args))}\n\n${block(tail)}` };
+}
+
+/** Replays the planned steps in a fresh session: setup with the network, then steps without it. */
+async function replay(extra: Extra, steps: Step[], side: Side, dir: string, base: string | undefined, target: string) {
+  const { session, error, log } = await openSession(
+    extra,
+    { name: `tidy-replay-${extraSlug(extra.name)}-${side}`, image: extra.image, work: dir, out: target, base, side, user, network: extra.interactive!.network, start: extra.interactive!.start },
+    Math.max(left(), 1),
+  );
+  if (error) return { status: `${error}: error`, outcome: "error" as const, log: block(tail(log, MAX_OUTPUT)) };
+  const codes: (number | null)[] = [];
+  const lines: string[] = [];
+  try {
+    for (const step of steps) {
+      if (left() <= 0) {
+        codes.push(null);
+        lines.push("Stopped: the 25 minute budget ran out.");
+        break;
+      }
+      const result = await session.exec(stepCommand(extra, step), LIMITS.stepSeconds);
+      codes.push(result.code);
+      lines.push(`$ ${step.verb} ${JSON.stringify(step.args)}: ${result.code === null ? "stopped at the time limit" : `exit code ${result.code}`}\n${tail(result.output, 1_500)}`);
+    }
+  } finally {
+    await session.stop();
+  }
+  const result = stepsOutcome(codes);
+  return { status: `${steps.length} steps: ${result}`, outcome: result, log: block(tail(lines.join("\n\n"), MAX_OUTPUT)) };
+}
+
+type Side = "after" | "before";
+
+// Extras run in containers that have no secrets and see only their own checkouts and output folder.
 const planFile = join(temp, "plan", "plan.json");
-const runs: Record<string, string[]> = existsSync(planFile) ? JSON.parse(readFileSync(planFile, "utf8")).runs : {};
+const runs: Record<string, unknown> = existsSync(planFile) ? JSON.parse(readFileSync(planFile, "utf8")).runs ?? {} : {};
+const planned = (value: unknown): value is string[] => Array.isArray(value) && value.length <= 40 && value.every((a) => typeof a === "string" && a.length <= 500 && !a.includes("\0"));
 for (const extra of meta.config.review.extras.filter((e) => runs[e.name])) {
   const slug = extraSlug(extra.name);
+  // The plan comes from the job that held a model key, so it is checked again here.
+  const steps = extra.interactive ? parseSteps(extra, runs[extra.name]) : null;
+  const args = extra.interactive ? null : runs[extra.name];
+  if (!steps && !planned(args)) {
+    console.error(`Ignoring an invalid plan for ${extra.name}`);
+    continue;
+  }
   const verdict: Partial<Verdict> = {};
   for (const side of ["after", "before"] as const) {
-    const dir = copy(side === "after" ? "source" : "base", `extra-${slug}-${side}`);
+    // With pr-tools, Before runs the pull request's tools against the base code mounted at /base.
+    const tools = side === "after" || extra.before === "pr-tools" ? "source" : "base";
+    const dir = copy(tools, `extra-${slug}-${side}`);
+    const base = side === "before" && extra.before === "pr-tools" ? copy("base", `extra-${slug}-base`) : undefined;
     const target = join(out, "extras", slug, side);
     mkdirSync(target, { recursive: true });
-    const command = extra.command.map((arg) => arg.replaceAll("{out}", "/out"));
-    const { status, code, tail } = run([
-      // Root may install packages, but without the capabilities a container escape would lean on.
-      "--cap-drop", "ALL", ...SETUP_CAPS.flatMap((cap) => ["--cap-add", cap]),
-      "-v", `${dir}:/work`, "-v", `${target}:/out`, "-w", "/work",
-      extra.image,
-      // The setup line comes from the default branch; the arguments are passed as a list, never parsed by a shell.
-      "bash", "-c", `set -e\n${extra.setup}\nexec "$@"`, "bash", ...command, ...runs[extra.name]!,
-    ]);
-    verdict[side] = outcome(code);
+    const result = steps ? await replay(extra, steps, side, dir, base, target) : runCommand(extra, args as string[], side, dir, base, target);
+    verdict[side] = result.outcome;
     spawnSync("sudo", ["chown", "-R", user, target]);
     const files = readdirSync(target).map((f) => `${f} (${Math.round(lstatSync(join(target, f)).size / 1024)} KB)`);
     const where = side === "after" ? "this pull request" : `the base branch (${meta.defaultBranch} at ${meta.extrasBase.slice(0, 7)})`;
-    console.log(`${extra.name} on ${side}: ${status}`);
-    sections.push(
-      `## Extra "${extra.name}" on ${where} (${status}: ${verdict[side]})\n\nArguments: ${block(JSON.stringify(runs[extra.name]))}\n\nFiles: ${files.join(", ") || "none"}\n\n${block(tail)}`,
-    );
+    const how = side === "before" && extra.before === "pr-tools" ? ", recorded with the pull request's tools" : "";
+    console.log(`${extra.name} on ${side}: ${result.status}`);
+    sections.push(`## Extra "${extra.name}" on ${where}${how} (${result.status})\n\nFiles: ${files.join(", ") || "none"}\n\n${result.log}`);
   }
   // Outside the folders the containers write to, so pull request code cannot forge it.
   writeFileSync(join(out, "extras", slug, "verdict.json"), JSON.stringify(verdict));

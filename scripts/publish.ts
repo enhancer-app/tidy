@@ -180,7 +180,7 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
   const root = join(temp, "checks", "extras");
   if (!existsSync(root)) return "";
   const folder = `${new Date().toISOString().slice(0, 10)}/pr-${meta.number}-${env("GITHUB_RUN_ID")}`;
-  const sections: { title: string; before: string | null; after: string | null }[] = [];
+  const sections: { title: string; before: string | null; after: string | null; prTools: boolean }[] = [];
   const withheld: string[] = [];
   const files: { path: string; data: Buffer }[] = [];
   let total = 0;
@@ -215,6 +215,7 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
         title: `${extra.name}${names.size > 1 ? `: \`${name}\`` : ""}`,
         before: pick(dirs.before, name, `${folder}/${slug}/before/${name}`),
         after: pick(dirs.after, name, `${folder}/${slug}/after/${name}`),
+        prTools: extra.before === "pr-tools",
       });
     }
   }
@@ -234,7 +235,10 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
   };
   const base = meta.extrasBase ? `\`${meta.defaultBranch}\` at ${meta.extrasBase.slice(0, 7)}` : `\`${meta.defaultBranch}\``;
   return [
-    ...sections.map((s) => `### ${s.title}\n\n**Before** (${base})\n\n${show(s.before)}\n\n**After** (this pull request)\n\n${show(s.after)}`),
+    ...sections.map(
+      (s) =>
+        `### ${s.title}\n\n**Before** (${base}${s.prTools ? ", recorded with this pull request's tools" : ""})\n\n${show(s.before)}\n\n**After** (this pull request)\n\n${show(s.after)}`,
+    ),
     ...withheld,
   ].join("\n\n");
 }

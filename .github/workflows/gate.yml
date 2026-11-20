@@ -16,6 +16,8 @@ on:
         value: ${{ jobs.gate.outputs.checks }}
       extras:
         value: ${{ jobs.gate.outputs.extras }}
+      live:
+        value: ${{ jobs.gate.outputs.live }}
       source-run:
         value: ${{ jobs.gate.outputs.source-run }}
       patch-sha:
@@ -41,6 +43,7 @@ jobs:
       review-model: ${{ steps.gate.outputs.review-model }}
       checks: ${{ steps.gate.outputs.checks }}
       extras: ${{ steps.gate.outputs.extras }}
+      live: ${{ steps.gate.outputs.live }}
       source-run: ${{ steps.gate.outputs.source-run }}
       patch-sha: ${{ steps.gate.outputs.patch-sha }}
       approver: ${{ steps.gate.outputs.approver }}

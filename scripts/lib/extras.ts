@@ -16,6 +16,13 @@ export function outcome(code: number | null): Outcome {
   return code === 0 ? "shown" : code === 1 ? "not-shown" : "error";
 }
 
+/** One side of a replayed interactive extra: any broken step makes it an error, any failed check "not-shown". */
+export function stepsOutcome(codes: (number | null)[]): Outcome {
+  const outcomes = codes.map(outcome);
+  if (!outcomes.length || outcomes.includes("error")) return "error";
+  return outcomes.includes("not-shown") ? "not-shown" : "shown";
+}
+
 /** Why Before and After should not be attached, or null when they differ the way the pull request claims. */
 export function withheldReason(verdict: Verdict): string | null {
   if (verdict.after === "error") return "The demo could not run on this pull request, so no files are attached.";
