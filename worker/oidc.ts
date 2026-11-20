@@ -58,12 +58,14 @@ export async function verifyActionsToken(
   return claims;
 }
 
-export type Role = "read" | "agent" | "write";
+export type Role = "read" | "agent" | "plan" | "write";
 
 // Only these reusable workflows may ask for credentials; the claim is set by GitHub, not the job.
 const ROLES: Record<string, Role> = {
   "gate.yml": "read",
   "agent.yml": "agent",
+  // Runs pull request code next to the model, so it only ever gets the separate planning key.
+  "plan.yml": "plan",
   "publish.yml": "write",
 };
 

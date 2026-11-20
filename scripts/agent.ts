@@ -1,12 +1,14 @@
 // Runs OpenCode inside a container that sees only the workspace, the snapshot and its output file.
 // An issue runs triage and then the chosen action in this one job, so the model key is fetched once.
-import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { env, setOutput } from "./lib/actions";
-import { type Kind, parseTriage, route } from "./lib/config";
+import { join, resolve } from "node:path";
+import { env, notice, setOutput } from "./lib/actions";
+import { Bridge, type Live, parseSteps, type Step as PlanStep } from "./lib/bridge";
+import { type Extra, type Kind, parseTriage, route } from "./lib/config";
 import { requestCredentials } from "./lib/credentials";
-import { type AgentTask, PROJECT_CONFIG, sandboxConfig } from "./lib/opencode";
+import { extraSlug } from "./lib/extras";
+import { type AgentTask, LIVE_DIR, LIVE_SHIM, LIVE_SOCKET, PROJECT_CONFIG, sandboxConfig } from "./lib/opencode";
+import { docker, openSession } from "./lib/sandbox";
 import { dropEscapingLinks } from "./lib/links";
 import { buildPatch } from "./lib/patch";
 import { leaksKey, type ProviderProblem, providerProblem } from "./lib/provider";
@@ -22,6 +24,17 @@ const context = join(temp, "context");
 const meta = JSON.parse(readFileSync(join(context, "meta.json"), "utf8")) as Meta;
 const sandbox = join(temp, "sandbox");
 const resultDir = join(temp, "result");
+// plan.yml sets LIVE: the planning model may try interactive extras in containers on this runner.
+const live = job === "plan" && process.env.LIVE === "true";
+const liveDir = join(temp, "live");
+// Outside liveDir, so no extra's folders can end up in the agent container's mount.
+const bridgeDir = join(temp, "live-bridge");
+// All live setups share this, so plan.yml's 60 minutes cover them and the agent's own timeout.
+const LIVE_SETUP_BUDGET = 15 * 60_000;
+const uid = process.getuid?.() ?? 1000;
+const gid = process.getgid?.() ?? 1000;
+/** Why each interactive extra has no live container, shown to the model. */
+const liveProblems = new Map<string, string>();
 
 interface Step {
   task: AgentTask;
@@ -45,10 +58,11 @@ function prompt(step: Step): string {
     : "You have no shell. Edit files only and say in the pull request body that no checks were run; CI will run them.";
   const read = (name: string) => readFileSync(join(env("TIDY_ROOT"), "prompts", `${name}.md`), "utf8");
   // Triage and plan only answer with JSON, so they need no writing style.
-  const text = step.task === "triage" || step.task === "plan" ? read(step.task) : `${read(step.task)}\n${read("style")}`;
+  const name = step.task === "plan" && live ? "plan-live" : step.task;
+  const text = step.task === "triage" || step.task === "plan" ? read(name) : `${read(step.task)}\n${read("style")}`;
   const extras = meta.config.review.extras
-    .filter((extra) => meta.extras.includes(extra.name))
-    .map((extra) => `### ${extra.name}\n\nCommand: \`${extra.command.join(" ")}\` followed by your arguments.\n\n${extra.instructions}`)
+    .filter((extra) => meta.extras.includes(extra.name) && (live || !extra.interactive))
+    .map((extra) => `### ${extra.name}\n\n${describeExtra(extra)}\n\n${extra.instructions}`)
     .join("\n\n");
   return text
     .replaceAll("{{repo}}", meta.repo)
@@ -61,6 +75,44 @@ function prompt(step: Step): string {
         ? "This is a follow-up review. /tidy/context/previous.md is your last review of this pull request, and diff.patch shows only the commits pushed since then. Put earlier findings these commits resolved in \"fixed\", and what is still open or new in \"findings\"."
         : "",
     );
+}
+
+function describeExtra(extra: Extra): string {
+  const before =
+    extra.before === "pr-tools"
+      ? "On the base side the pull request's tools run too, with the base code at /base and TIDY_SIDE=before."
+      : "On the base side the base branch's own tools run, so steps or arguments this pull request adds do not exist there.";
+  if (!extra.interactive) return `Command: \`${extra.command.join(" ")}\` followed by your arguments. ${before}`;
+  const steps = Object.entries(extra.interactive.steps).map(([verb, command]) => `- \`${verb}\`: \`${command.join(" ")}\` followed by your arguments`);
+  const problem = liveProblems.get(extra.name);
+  const status = problem ? `Its live container is not available (${problem}), so plan the steps from the code.` : "Its live container is ready.";
+  return `Interactive. ${status} Steps:\n\n${steps.join("\n")}\n\n${before}`;
+}
+
+/** Starts a live container per interactive extra, before any key is on this runner. */
+async function openLive(): Promise<Live[]> {
+  const opened: Live[] = [];
+  const interactive = meta.config.review.extras.filter((e) => e.interactive && meta.extras.includes(e.name));
+  const deadline = Date.now() + LIVE_SETUP_BUDGET;
+  for (const extra of interactive) {
+    const slug = extraSlug(extra.name);
+    const work = join(liveDir, slug, "work");
+    const out = join(liveDir, slug, "out");
+    cpSync(join(context, "source"), work, { recursive: true, verbatimSymlinks: true });
+    mkdirSync(out, { recursive: true });
+    const options = {
+      name: `tidy-live-${slug}`, image: extra.image, work, out, side: "after" as const,
+      user: `${uid}:${gid}`, network: extra.interactive!.network, start: extra.interactive!.start,
+      memory: interactive.length > 1 ? "3g" : "6g",
+    };
+    const { session, error, log } = await openSession(extra, options, deadline);
+    process.stdout.write(log);
+    if (error) {
+      console.error(`Live container for ${extra.name}: ${error}`);
+      liveProblems.set(extra.name, error);
+    } else opened.push({ extra, session });
+  }
+  return opened;
 }
 
 function prepareSandbox(step: Step): { work: string; stash: string } {
@@ -82,18 +134,16 @@ function prepareSandbox(step: Step): { work: string; stash: string } {
   const checks = join(temp, "checks", "checks.md");
   if (step.task === "review") writeFileSync(join(sandbox, "context", "checks.md"), existsSync(checks) ? readFileSync(checks) : "No checks are configured.\n");
   writeFileSync(join(sandbox, "context", "prompt.md"), prompt(step));
-  writeFileSync(join(sandbox, "etc", "opencode.json"), JSON.stringify(sandboxConfig(step.task, step.shell), null, 2));
+  writeFileSync(join(sandbox, "etc", "opencode.json"), JSON.stringify(sandboxConfig(step.task, step.shell, live), null, 2));
   return { work, stash };
 }
 
 /** Runs OpenCode and returns its output, which is printed too. */
-function runContainer(step: Step, work: string): string {
+async function runContainer(step: Step, work: string): Promise<string> {
   // The key file lives outside every mount and is deleted as soon as the container exits.
   const keyFile = join(temp, `keys-${process.pid}.env`);
   writeFileSync(keyFile, Object.entries(keys).map(([name, value]) => `${name}=${value}`).join("\n") + "\n");
   chmodSync(keyFile, 0o600);
-  const uid = process.getuid?.() ?? 1000;
-  const gid = process.getgid?.() ?? 1000;
   const install = step.shell ? '"@opencode/cli@$OPENCODE_VERSION" bun' : '"@opencode/cli@$OPENCODE_VERSION"';
   const script = [
     "set -e",
@@ -102,11 +152,13 @@ function runContainer(step: Step, work: string): string {
     'exec opencode run --standalone --auto -m "$MODEL" "$(cat /tidy/context/prompt.md)"',
   ].join("\n");
   const readOnly = step.task === "fix" ? "" : ":ro";
+  // Only the folder with the bridge socket, never the live containers' own folders.
+  const liveMounts = live ? ["-v", `${bridgeDir}:${LIVE_DIR}`, "-v", `${resolve(env("TIDY_ROOT"), "scripts", "live-shim.mjs")}:${LIVE_SHIM}:ro`] : [];
+  const name = `tidy-agent-${process.pid}-${step.task}`;
   try {
-    const result = spawnSync(
-      "docker",
+    const result = await docker(
       [
-        "run", "--rm", "--init",
+        "run", "--rm", "--init", "--name", name,
         "--user", `${uid}:${gid}`,
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--pids-limit", "2048", "--memory", "8g",
@@ -117,18 +169,20 @@ function runContainer(step: Step, work: string): string {
         "-v", `${join(sandbox, "context")}:/tidy/context:ro`,
         "-v", `${join(sandbox, "out")}:/tidy/out`,
         "-v", `${join(sandbox, "etc")}:/etc/opencode:ro`,
+        ...liveMounts,
         "-w", "/work",
         meta.config.agent.image,
         "bash", "-c", script,
       ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024, timeout: meta.config.agent.timeout_minutes * 60_000 },
+      meta.config.agent.timeout_minutes * 60_000,
+      true,
     );
-    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
-    process.stdout.write(output);
-    if (result.error) console.error(`Agent container stopped: ${result.error.message}`);
-    else if (result.status !== 0) console.error(`Agent container exited with ${result.status}`);
-    return output;
+    if (result.code === null) console.error("Agent container stopped at the time limit");
+    else if (result.code !== 0) console.error(`Agent container exited with ${result.code}`);
+    return result.output;
   } finally {
+    // Killing the docker client at the time limit does not always stop the container, which holds the key.
+    await docker(["rm", "-f", name], 60_000);
     rmSync(keyFile, { force: true });
   }
 }
@@ -137,10 +191,10 @@ const resultFile = () => join(sandbox, "out", "result.json");
 const hasResult = () => existsSync(resultFile()) && lstatSync(resultFile()).isFile();
 
 /** Runs one step; a provider refusal with no result becomes a ProviderError for the admin. */
-function runStep(step: Step): { work: string; stash: string } {
+async function runStep(step: Step): Promise<{ work: string; stash: string }> {
   model = step.model;
   const paths = prepareSandbox(step);
-  const output = runContainer(step, paths.work);
+  const output = await runContainer(step, paths.work);
   const problem = hasResult() ? null : providerProblem(output);
   if (problem) throw new ProviderError(problem);
   return paths;
@@ -165,13 +219,21 @@ function emit(result: object, patch?: Buffer): void {
 }
 
 // Arguments go to the command as a list, never through a shell, so only their shape is checked here.
+// Steps must also name a step the extra declares.
 function emitPlan(value: Record<string, unknown>): void {
-  const runs: Record<string, string[]> = {};
+  const runs: Record<string, string[] | { steps: PlanStep[] }> = {};
   for (const [given, args] of Object.entries((value.runs ?? {}) as Record<string, unknown>)) {
     // Models often change the case of a name, so match it loosely and store the configured one.
     const name = meta.extras.find((extra) => extra.toLowerCase() === given.trim().toLowerCase());
-    if (!name) {
+    const extra = meta.config.review.extras.find((e) => e.name === name);
+    if (!name || !extra) {
       console.error(`Ignoring arguments for unknown extra ${given}`);
+      continue;
+    }
+    if (extra.interactive) {
+      const steps = live ? parseSteps(extra, args) : null;
+      if (steps) runs[name] = { steps };
+      else console.error(`Ignoring invalid steps for ${name}`);
       continue;
     }
     if (!Array.isArray(args) || args.length > 40 || !args.every((a) => typeof a === "string" && a.length <= 500 && !a.includes("\0"))) {
@@ -232,7 +294,7 @@ function finishFix(work: string, stash: string, value: Record<string, unknown>, 
 }
 
 async function handleIssue(): Promise<void> {
-  runStep({ task: "triage", model: env("MODEL"), shell: false });
+  await runStep({ task: "triage", model: env("MODEL"), shell: false });
   const triage = parseTriage(readResult());
   const decision = route(meta.config, triage, meta.forceFix);
   console.log(`Triage: ${triage.kind}/${triage.size} → ${decision.action} ${decision.model}`);
@@ -242,7 +304,7 @@ async function handleIssue(): Promise<void> {
   }
   if (decision.action === "ignore") return;
   const shell = decision.action === "fix" && meta.trusted && env("SHELL_ALLOWED") === "true";
-  const { work, stash } = runStep({ task: decision.action, model: decision.model, shell });
+  const { work, stash } = await runStep({ task: decision.action, model: decision.model, shell });
   let value: Record<string, unknown>;
   try {
     value = readResult();
@@ -255,11 +317,21 @@ async function handleIssue(): Promise<void> {
 }
 
 async function main() {
-  keys = (await requestCredentials("agent")).keys ?? {};
+  // Setup runs pull request code as root with the network, so it finishes before the key reaches this runner.
+  const opened = live ? await openLive() : [];
   try {
-    if (Object.keys(keys).length === 0) throw new ProviderError("key");
+    keys = (await requestCredentials(live ? "plan" : "agent")).keys ?? {};
+    if (Object.keys(keys).length === 0) {
+      if (live) notice("interactive review extras need a planning key in /admin; they were skipped");
+      throw new ProviderError("key");
+    }
     if (job === "issue") return await handleIssue();
-    runStep({ task: job, model, shell: false });
+    const server = live ? await listenBridge(opened) : null;
+    try {
+      await runStep({ task: job, model, shell: false });
+    } finally {
+      server?.close();
+    }
     const value = readResult();
     if (job === "plan") return emitPlan(value);
     if (job === "thread") return emitThreadReply(value);
@@ -272,7 +344,14 @@ async function main() {
     // publish tells the thread and pings the admin; only they can top up usage or replace the key.
     rmSync(resultDir, { recursive: true, force: true });
     emit({ type: "provider", problem: error.problem });
+  } finally {
+    await Promise.all(opened.map((l) => l.session.stop()));
   }
+}
+
+async function listenBridge(opened: Live[]) {
+  mkdirSync(bridgeDir, { recursive: true });
+  return new Bridge(opened, keys).listen(join(bridgeDir, "bridge.sock"));
 }
 
 await main();

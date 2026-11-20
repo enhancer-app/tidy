@@ -6,7 +6,7 @@ type Statement = { action: string; resource: string; effect: "allow" | "deny" };
  * System-level OpenCode config for the sandbox. Policies at this level outrank anything the checked-out
  * repository ships, and the last matching statement wins, so we deny everything and lift what the task needs.
  */
-export function sandboxConfig(task: AgentTask, shell: boolean): object {
+export function sandboxConfig(task: AgentTask, shell: boolean, live = false): object {
   const tool = (resource: string, effect: Statement["effect"]): Statement => ({ action: "tool.use", resource, effect });
   const policies: Statement[] = [
     tool("*", "deny"),
@@ -29,6 +29,9 @@ export function sandboxConfig(task: AgentTask, shell: boolean): object {
     { action: "plugin.use", resource: "*", effect: "deny" },
     { action: "websearch.use", resource: "*", effect: "deny" },
   );
+  // Only tidy's own server, whose tools run declared steps in the live containers; still no shell.
+  const withLive = live && task === "plan";
+  if (withLive) policies.push({ action: "mcp.use", resource: "tidy", effect: "allow" }, tool("tidy_step:*", "allow"), tool("tidy_restart:*", "allow"));
   return {
     $schema: "https://opencode.ai/config.json",
     permissions: [
@@ -36,8 +39,14 @@ export function sandboxConfig(task: AgentTask, shell: boolean): object {
       { action: "webfetch", resource: "*", effect: "deny" },
     ],
     policies,
+    // `env -i` starts the shim without OpenCode's environment, which holds the model key.
+    ...(withLive ? { mcp: { servers: { tidy: { type: "local", command: ["env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin", "node", LIVE_SHIM, LIVE_SOCKET] } } } } : {}),
   };
 }
+
+export const LIVE_SHIM = "/tidy/bin/live-shim.mjs";
+export const LIVE_DIR = "/tidy/live";
+export const LIVE_SOCKET = `${LIVE_DIR}/bridge.sock`;
 
 /** Files OpenCode would load as project configuration; moved out of the sandbox for the run. */
 export const PROJECT_CONFIG = ["opencode.json", "opencode.jsonc", ".opencode"];

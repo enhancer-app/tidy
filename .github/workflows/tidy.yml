@@ -45,11 +45,12 @@ jobs:
       task: issue
       model: ${{ needs.gate.outputs.triage-model }}
       shell: ${{ needs.gate.outputs.trusted == 'true' }}
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
 
   # Picks the arguments for the repository's review extras, such as the steps of a demo recording.
   plan:
     needs: gate
-    if: needs.gate.outputs.task == 'review' && needs.gate.outputs.extras == 'true'
+    if: needs.gate.outputs.task == 'review' && needs.gate.outputs.extras == 'true' && needs.gate.outputs.live != 'true'
     uses: ./.github/workflows/agent.yml
     permissions:
       contents: read
@@ -57,13 +58,28 @@ jobs:
     with:
       task: plan
       model: ${{ needs.gate.outputs.review-model }}
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
+
+  # The same with live containers for interactive extras, in a file that only gets the planning key.
+  plan-live:
+    needs: gate
+    if: needs.gate.outputs.task == 'review' && needs.gate.outputs.live == 'true'
+    uses: ./.github/workflows/plan.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      model: ${{ needs.gate.outputs.review-model }}
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
 
   checks:
-    needs: [gate, plan]
+    needs: [gate, plan, plan-live]
     if: always() && needs.gate.outputs.task == 'review' && needs.gate.outputs.checks == 'true'
     uses: ./.github/workflows/checks.yml
     permissions:
       contents: read
+    with:
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
 
   review:
     needs: [gate, checks]
@@ -76,6 +92,7 @@ jobs:
     with:
       task: review
       model: ${{ needs.gate.outputs.review-model }}
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
 
   # Answers a reply to one of tidy's inline comments, in that thread. No checks, no new review.
   thread:
@@ -88,6 +105,7 @@ jobs:
     with:
       task: thread
       model: ${{ needs.gate.outputs.review-model }}
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
 
   publish:
     needs: [gate, announce, issue, review, thread]
@@ -104,3 +122,5 @@ jobs:
       approver: ${{ needs.gate.outputs.approver }}
       proposal: ${{ needs.gate.outputs.proposal }}
       failed: ${{ contains(needs.*.result, 'failure') }}
+      context-artifact: ${{ needs.gate.outputs.context-artifact }}
+      result-artifact: ${{ needs.review.outputs.result-artifact || needs.issue.outputs.result-artifact || needs.thread.outputs.result-artifact }}

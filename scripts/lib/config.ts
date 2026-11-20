@@ -23,7 +23,21 @@ export interface Extra {
   instructions: string;
   image: string;
   setup: string;
+  /** Empty for interactive extras, which run their steps instead. */
   command: string[];
+  /** "pr-tools" runs Before with the pull request's tools and the base code mounted at /base. */
+  before: "base" | "pr-tools";
+  interactive?: Interactive;
+}
+
+/** Lets the planning model try the repository's own tool in a live container before tidy records anything. */
+export interface Interactive {
+  /** Started in the background before the first step, such as the app under test. */
+  start: string[];
+  /** The only commands the model can run: a name, and the command its arguments are appended to. */
+  steps: Record<string, string[]>;
+  /** Steps run without a network unless the repository turns it on. */
+  network: boolean;
 }
 
 export interface Config {
@@ -81,23 +95,42 @@ function parseExtras(value: unknown): Extra[] {
   };
   return value.map((raw, index) => {
     const extra = raw as Record<string, unknown>;
+    const args = (v: unknown, field: string): string[] => {
+      if (!Array.isArray(v) || !v.length || v.length > 50 || !v.every((a) => typeof a === "string" && a.length < 500)) {
+        throw new Error(`review.extras[${index}].${field} must be a list of arguments`);
+      }
+      return v;
+    };
     const name = text(extra.name, "name", 40);
     if (!/^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(name)) throw new Error(`review.extras[${index}].name may use letters, digits, spaces, - and _`);
     const when = extra.when === undefined ? ["**"] : extra.when;
-    const command = extra.command;
     if (!Array.isArray(when) || !when.every((g) => typeof g === "string" && g.length < 200)) throw new Error(`review.extras[${index}].when must be a list of globs`);
-    if (!Array.isArray(command) || !command.length || command.length > 50 || !command.every((a) => typeof a === "string" && a.length < 500)) {
-      throw new Error(`review.extras[${index}].command must be a list of arguments`);
-    }
     const image = extra.image === undefined ? "node:22-bookworm" : text(extra.image, "image", 200);
     if (!IMAGE.test(image)) throw new Error(`review.extras[${index}].image is not a valid image reference`);
+    const before = extra.before ?? "base";
+    if (before !== "base" && before !== "pr-tools") throw new Error(`review.extras[${index}].before must be base or pr-tools`);
+    let interactive: Interactive | undefined;
+    if (extra.interactive !== undefined) {
+      const raw = (extra.interactive ?? {}) as { start?: unknown; steps?: unknown; network?: unknown };
+      const steps = Object.entries(raw.steps && typeof raw.steps === "object" ? raw.steps : {});
+      if (!steps.length || steps.length > 20 || !steps.every(([verb]) => /^[a-z][a-z0-9-]{0,30}$/.test(verb))) {
+        throw new Error(`review.extras[${index}].interactive.steps must map up to 20 lowercase names to commands`);
+      }
+      interactive = {
+        start: raw.start === undefined ? [] : args(raw.start, "interactive.start"),
+        steps: Object.fromEntries(steps.map(([verb, command]) => [verb, args(command, `interactive.steps.${verb}`)])),
+        network: raw.network === true,
+      };
+    }
     return {
       name,
       when: when as string[],
       instructions: text(extra.instructions ?? "", "instructions", 4000),
       image,
       setup: text(extra.setup ?? "", "setup", 4000),
-      command: command as string[],
+      command: interactive && extra.command === undefined ? [] : args(extra.command, "command"),
+      before,
+      ...(interactive ? { interactive } : {}),
     };
   });
 }

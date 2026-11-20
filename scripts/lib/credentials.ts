@@ -16,7 +16,7 @@ export interface Target {
 }
 
 export interface Credentials {
-  role: "read" | "agent" | "write";
+  role: "read" | "agent" | "plan" | "write";
   target: Target;
   bot: { login: string };
   /** The tidy instance's owner, pinged when the model provider refuses tidy's key. */

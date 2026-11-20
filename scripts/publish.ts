@@ -9,6 +9,7 @@ import { canWrite, client, GitHubError, type GitHubClient } from "./lib/github";
 import { applyPatch, git } from "./lib/patch";
 import { ASSETS_BRANCH, storeAssets } from "./lib/assets";
 import { commitMessage, thanks } from "./lib/attribution";
+import { extraSlug, parseVerdict, withheldReason } from "./lib/extras";
 import { providerNotice } from "./lib/provider";
 import { commentableLines, renderReview, type Review, validateReview, VERDICTS, withSuggestion } from "./lib/review";
 import { sanitize, singleLine } from "./lib/sanitize";
@@ -184,7 +185,8 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
   const root = join(temp, "checks", "extras");
   if (!existsSync(root)) return "";
   const folder = `${new Date().toISOString().slice(0, 10)}/pr-${meta.number}-${env("GITHUB_RUN_ID")}`;
-  const sections: { title: string; before: string | null; after: string | null }[] = [];
+  const sections: { title: string; before: string | null; after: string | null; prTools: boolean }[] = [];
+  const withheld: string[] = [];
   const files: { path: string; data: Buffer }[] = [];
   let total = 0;
   const pick = (dir: string, name: string, path: string) => {
@@ -197,7 +199,18 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
     return path;
   };
   for (const extra of meta.config.review.extras) {
-    const slug = extra.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const slug = extraSlug(extra.name);
+    const verdictFile = join(root, slug, "verdict.json");
+    if (!existsSync(verdictFile)) continue;
+    let verdict = null;
+    try {
+      verdict = parseVerdict(readJson(verdictFile, 1_000));
+    } catch {}
+    const reason = verdict ? withheldReason(verdict) : "The demo did not report a result, so no files are attached.";
+    if (reason) {
+      withheld.push(`### ${extra.name}\n\n_${reason}_`);
+      continue;
+    }
     const dirs = { before: join(root, slug, "before"), after: join(root, slug, "after") };
     const names = new Set(
       Object.values(dirs).flatMap((dir) => (existsSync(dir) ? readdirSync(dir).filter((f) => SAFE_NAME.test(f) && MEDIA[extname(f).toLowerCase()]) : [])),
@@ -207,10 +220,11 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
         title: `${extra.name}${names.size > 1 ? `: \`${name}\`` : ""}`,
         before: pick(dirs.before, name, `${folder}/${slug}/before/${name}`),
         after: pick(dirs.after, name, `${folder}/${slug}/after/${name}`),
+        prTools: extra.before === "pr-tools",
       });
     }
   }
-  if (!sections.length) return "";
+  if (!sections.length) return withheld.join("\n\n");
   let urls = new Map<string, string>();
   try {
     if (files.length) urls = await storeAssets(gh, meta.repo, files);
@@ -224,9 +238,14 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
     if (!url) return "_could not attach_";
     return /\.(mp4|webm)$/i.test(path) ? url : `![${basename(path)}](${url})`;
   };
-  return sections
-    .map((s) => `### ${s.title}\n\n**Before** (\`${meta.defaultBranch}\`)\n\n${show(s.before)}\n\n**After** (this pull request)\n\n${show(s.after)}`)
-    .join("\n\n");
+  const base = meta.extrasBase ? `\`${meta.defaultBranch}\` at ${meta.extrasBase.slice(0, 7)}` : `\`${meta.defaultBranch}\``;
+  return [
+    ...sections.map(
+      (s) =>
+        `### ${s.title}\n\n**Before** (${base}${s.prTools ? ", recorded with this pull request's tools" : ""})\n\n${show(s.before)}\n\n**After** (this pull request)\n\n${show(s.after)}`,
+    ),
+    ...withheld,
+  ].join("\n\n");
 }
 
 // The prompt asks the model not to repeat declined findings; this holds even when it does.
