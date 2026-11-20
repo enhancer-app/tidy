@@ -160,21 +160,32 @@ export async function isAdmin(env: Env, instance: Instance, login: string): Prom
   }
 }
 
-async function dashboard(env: Env, instance: Instance, current: Session): Promise<Response> {
-  const csrf = await mac(await deriveKeys(env.TIDY_MASTER_KEY), "csrf", current.sid);
+type KeyGroup = "agent" | "plan";
+
+function keyTable(keys: Instance["keys"], group: KeyGroup, csrf: string): string {
   const labels = new Map(Object.values(PROVIDERS).map((p) => [p.env, p.label]));
-  const rows = Object.entries(instance.keys)
+  const rows = Object.entries(keys)
     .map(
       ([name, key]) => `<tr><td><div>${escape(labels.get(name) ?? "Other")}</div><code class="var">${escape(name)}</code></td>
 <td>…${escape(key.value.slice(-4))}</td>
 <td class="muted">${escape(key.updated.slice(0, 16).replace("T", " "))} by @${escape(key.by)}</td>
-<td><form method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}">
+<td><form method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}"><input type="hidden" name="group" value="${group}">
 <input type="hidden" name="name" value="${escape(name)}"><button class="small danger" name="op" value="delete">Remove</button></form></td></tr>`,
     )
     .join("");
   const options = Object.entries(PROVIDERS)
-    .map(([id, p]) => `<option value="${id}">${escape(p.label)}${p.env in instance.keys ? " · saved" : ""}</option>`)
+    .map(([id, p]) => `<option value="${id}">${escape(p.label)}${p.env in keys ? " · saved" : ""}</option>`)
     .join("");
+  return `<div class="table"><table><tr><th>Provider</th><th>Key</th><th>Changed</th><th></th></tr>${rows || '<tr><td colspan="4" class="muted">No keys yet.</td></tr>'}</table></div>
+<form class="stack" method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}"><input type="hidden" name="group" value="${group}">
+<label>Provider<select name="provider">${options}<option value="other">Other (custom variable)</option></select></label>
+<label class="custom">Environment variable OpenCode reads<input type="text" name="name" placeholder="MY_PROVIDER_API_KEY" pattern="[A-Z][A-Z0-9_]{1,63}"></label>
+<label>Key<input type="password" name="value" autocomplete="off" required maxlength="4096"></label>
+<div><button class="primary" name="op" value="set">Save key</button></div></form>`;
+}
+
+async function dashboard(env: Env, instance: Instance, current: Session): Promise<Response> {
+  const csrf = await mac(await deriveKeys(env.TIDY_MASTER_KEY), "csrf", current.sid);
   return page(
     "tidy admin",
     `<div class="bar"><p>Signed in as @${escape(current.login)}. App: <a href="https://github.com/apps/${escape(instance.app.slug)}">${escape(instance.app.slug)}</a>
@@ -182,12 +193,11 @@ async function dashboard(env: Env, instance: Instance, current: Session): Promis
 <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${escape(csrf)}"><button class="small">Sign out</button></form></div>
 <section class="box"><h2>Model keys</h2><p class="muted">Keys can be replaced or removed, never shown. Every change opens an issue in
 <code>${escape(instance.repo.fullName)}</code>. Models are chosen in <code>tidy.yml</code>, not here.</p>
-<div class="table"><table><tr><th>Provider</th><th>Key</th><th>Changed</th><th></th></tr>${rows || '<tr><td colspan="4" class="muted">No keys yet.</td></tr>'}</table></div>
-<form class="stack" method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}">
-<label>Provider<select name="provider">${options}<option value="other">Other (custom variable)</option></select></label>
-<label class="custom">Environment variable OpenCode reads<input type="text" name="name" placeholder="MY_PROVIDER_API_KEY" pattern="[A-Z][A-Z0-9_]{1,63}"></label>
-<label>Key<input type="password" name="value" autocomplete="off" required maxlength="4096"></label>
-<div><button class="primary" name="op" value="set">Save key</button></div></form></section>`,
+${keyTable(instance.keys, "agent", csrf)}</section>
+<section class="box"><h2>Planning key</h2><p class="muted">Only for interactive review extras, which run pull request code on the
+same machine as the model. Use a separate key with a low spending limit at the provider, so a leak costs little.
+Without one, interactive extras are skipped.</p>
+${keyTable(instance.planKeys ?? {}, "plan", csrf)}</section>`,
     { app: instance.app.slug },
   );
 }
@@ -196,17 +206,19 @@ async function updateKey(form: FormData, env: Env, instance: Instance, current: 
   const op = form.get("op");
   const name = keyName(op === "set" ? (form.get("provider") as string | null) : null, form.get("name") as string | null);
   if (!name) return page("Invalid name", "<p>Use an environment variable name such as OPENCODE_API_KEY.</p>", { status: 400 });
+  const plan = form.get("group") === "plan";
+  const keys = plan ? (instance.planKeys ??= {}) : instance.keys;
   if (op === "set") {
     const value = String(form.get("value") ?? "").trim();
     if (!value || value.length > 4096 || /\s/.test(value)) return page("Invalid key", "<p>The key is empty or malformed.</p>", { status: 400 });
-    instance.keys[name] = { value, updated: new Date().toISOString(), by: current.login };
+    keys[name] = { value, updated: new Date().toISOString(), by: current.login };
   } else if (op === "delete") {
-    delete instance.keys[name];
+    delete keys[name];
   } else {
     return page("Invalid request", "", { status: 400 });
   }
   await saveInstance(env, instance);
-  await audit(env, instance, `${op === "set" ? "Set" : "Removed"} model key ${name}`, current.login);
+  await audit(env, instance, `${op === "set" ? "Set" : "Removed"} ${plan ? "planning" : "model"} key ${name}`, current.login);
   return Response.redirect(`${origin}/admin`, 303);
 }
 

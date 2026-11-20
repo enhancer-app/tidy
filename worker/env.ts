@@ -30,6 +30,8 @@ export interface Instance {
   repo: RepoRecord;
   /** Model credentials, keyed by the environment variable OpenCode reads. */
   keys: Record<string, { value: string; updated: string; by: string }>;
+  /** Keys only for interactive extra planning, which runs pull request code on the same machine. */
+  planKeys?: Record<string, { value: string; updated: string; by: string }>;
 }
 
 export interface Dispatch {
