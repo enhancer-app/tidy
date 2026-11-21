@@ -35,5 +35,6 @@ export function keysFor(entries: KeyEntry[], role: "agent" | "plan"): Record<str
 /** The entries a role would get, for the effective keys shown in /admin. */
 export function entriesFor(entries: KeyEntry[], role: "agent" | "plan"): KeyEntry[] {
   const chosen = keysFor(entries, role);
-  return entries.filter((e) => chosen[e.name] === e.value && (e.use === role || e.use === "all"));
+  const shown = new Set<string>();
+  return entries.filter((e) => chosen[e.name] === e.value && (e.use === role || e.use === "all") && !shown.has(e.name) && shown.add(e.name));
 }

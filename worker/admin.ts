@@ -226,8 +226,8 @@ const invalid = (title: string, text: string) => page(title, `<p>${text}</p>`, {
 async function updateKey(form: FormData, env: Env, instance: Instance, current: Session, origin: string): Promise<Response> {
   const op = form.get("op");
   const entries = keyEntries(instance);
-  const use = form.get("use") ?? "all";
-  if (op !== "delete" && !KEY_USES.includes(use as KeyUse)) return invalid("Invalid request", "Unknown use.");
+  const use = form.get("use");
+  if (op !== "delete" && !KEY_USES.includes(use as KeyUse)) return invalid("Invalid request", "Choose what the key is for.");
   let title: string;
   if (op === "set") {
     const name = keyName(form.get("provider") as string | null, form.get("name") as string | null);
