@@ -28,7 +28,8 @@ export function parseSteps(extra: Extra, value: unknown): Step[] | null {
   return parsed.every((step) => step !== null) ? (parsed as Step[]) : null;
 }
 
-export const stepCommand = (extra: Extra, step: Step) => [...withOut(extra.interactive!.steps[step.verb]!), ...step.args];
+// Models copy {out} from the step list into their arguments, so it is filled in there too.
+export const stepCommand = (extra: Extra, step: Step) => withOut([...extra.interactive!.steps[step.verb]!, ...step.args]);
 
 export interface Live {
   extra: Extra;
