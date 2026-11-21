@@ -1,3 +1,4 @@
+import type { KeyEntry } from "./keys";
 import type { TidyState } from "./state";
 
 export interface Env {
@@ -28,9 +29,11 @@ export interface RepoRecord {
 export interface Instance {
   app: AppRecord;
   repo: RepoRecord;
-  /** Model credentials, keyed by the environment variable OpenCode reads. */
+  /** Model credentials, each marked with what it is for. Replaces `keys` and `planKeys` on the next save. */
+  modelKeys?: KeyEntry[];
+  /** The older format: model credentials keyed by the environment variable OpenCode reads. */
   keys: Record<string, { value: string; updated: string; by: string }>;
-  /** Keys only for interactive extra planning, which runs pull request code on the same machine. */
+  /** The older format's keys for interactive extra planning only. */
   planKeys?: Record<string, { value: string; updated: string; by: string }>;
 }
 

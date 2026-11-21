@@ -1,7 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { b64url, utf8 } from "../shared/encoding";
 import { type ActionsClaims, ISSUER, type Jwks, roleFor, verifyActionsToken } from "../worker/oidc";
-import { modelKeys } from "../worker/token";
 
 const repo = { fullName: "alice/tidy", id: 42, ownerId: 7, defaultBranch: "main" };
 let keys: CryptoKeyPair;
@@ -85,14 +84,6 @@ describe("roleFor", () => {
     expect(() => roleFor(claims({ event_name: "pull_request" }), repo)).toThrow("dispatch");
     expect(() => roleFor(claims({ repository_id: "43" }), repo)).toThrow("tidy repository");
     expect(() => roleFor(claims({ runner_environment: "self-hosted" }), repo)).toThrow("GitHub-hosted");
-  });
-
-  test("the planning role gets only the planning key, even when none is set", () => {
-    const key = (value: string) => ({ value, updated: "", by: "" });
-    const instance = { keys: { ANTHROPIC_API_KEY: key("main") }, planKeys: { OPENROUTER_API_KEY: key("plan") } };
-    expect(modelKeys(instance, "plan")).toEqual({ OPENROUTER_API_KEY: "plan" });
-    expect(modelKeys({ keys: instance.keys }, "plan")).toEqual({});
-    expect(modelKeys(instance, "agent")).toEqual({ ANTHROPIC_API_KEY: "main" });
   });
 
   test("a reusable workflow from a similarly named repository is rejected", () => {

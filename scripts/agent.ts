@@ -322,7 +322,7 @@ async function main() {
   try {
     keys = (await requestCredentials(live ? "plan" : "agent")).keys ?? {};
     if (Object.keys(keys).length === 0) {
-      if (live) notice("interactive review extras need a planning key in /admin; they were skipped");
+      if (live) notice("no model key in /admin is for everything or for planning, so interactive review extras were skipped");
       throw new ProviderError("key");
     }
     if (job === "issue") return await handleIssue();

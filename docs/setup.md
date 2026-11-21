@@ -16,9 +16,8 @@ You need a GitHub account, a free Cloudflare account and a model key, for exampl
    sure your tidy repository is included.
 5. Open `https://<your-worker>/admin`, sign in with GitHub, pick your model provider, for example
    OpenCode Zen / Go, and save its key. You can save keys for several providers. For a provider not in
-   the list, pick **Other** and enter the variable OpenCode reads for it. Only if a repository uses
-   [interactive extras](extras.md#interactive-extras), also save a separate **planning key** with a
-   low spending limit.
+   the list, pick **Other** and enter the variable OpenCode reads for it. A key is used for everything by default;
+   see [interactive extras](extras.md#interactive-extras) for a separate, cheaper key for planning.
 
 Every key change in `/admin` opens an issue in your tidy repository, so a change you did not make does
 not go unnoticed. You can close those issues.

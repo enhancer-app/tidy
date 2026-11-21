@@ -1,7 +1,7 @@
 name: tidy plan
 
 # Plans interactive review extras. The model drives live containers with pull request code on this
-# runner, so the Worker grants this file only the separate planning key, never the agent's keys.
+# runner, so the Worker gives this file only keys marked for everything or for planning in /admin.
 on:
   workflow_call:
     inputs:
