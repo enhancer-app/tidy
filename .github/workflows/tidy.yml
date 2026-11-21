@@ -60,7 +60,7 @@ jobs:
       model: ${{ needs.gate.outputs.review-model }}
       context-artifact: ${{ needs.gate.outputs.context-artifact }}
 
-  # The same with live containers for interactive extras, in a file that only gets the planning key.
+  # The same with live containers for interactive extras, in a file the Worker can give its own keys.
   plan-live:
     needs: gate
     if: needs.gate.outputs.task == 'review' && needs.gate.outputs.live == 'true'

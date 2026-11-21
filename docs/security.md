@@ -29,10 +29,11 @@ tidy assumes the model can be talked into anything, and limits what it can do in
   as a list. Extras run as root with network access (with only the capabilities package managers
   need), so for outsiders' pull requests they run only when a maintainer asks with `@tidy review`.
   tidy attaches their files only when the pull request shows the behaviour and the base does not.
-- **Interactive planning gets its own key.** For [interactive extras](extras.md#interactive-extras) the
-  model drives a live container with pull request code, so `plan.yml` gets only the planning key from
-  `/admin`, never the model keys, and `/admin` refuses the same key in both groups. Setup finishes
-  before that key reaches the runner, in a separate root container that tidy saves as an image. Steps
+- **Interactive planning can get its own key.** For [interactive extras](extras.md#interactive-extras) the
+  model drives a live container with pull request code. Each key in `/admin` is for everything (the
+  default), main only, or planning only; `plan.yml` never gets a main-only key, a planning-only key wins
+  over one for everything, and `/admin` shows which keys each workflow gets, with a warning while planning
+  shares a key. Setup finishes before any key reaches the runner, in a separate root container that tidy saves as an image. Steps
   run in a new container from it that starts as an unprivileged user, with no capabilities and no
   network (or, with `network: true`, on a network that cannot reach other containers), so nothing
   setup left behind runs as root. The model has no shell and can only call the steps
@@ -67,11 +68,13 @@ tidy assumes the model can be talked into anything, and limits what it can do in
 
 - A trusted fix has a shell and the model key in the same container, so a prompt injection in a
   maintainer-written thread could leak the model key. It cannot push anything.
-- Interactive planning runs pull request code on the same runner as the planning key. A container
-  escape there, for example through a kernel bug, could leak that key. An escape in planning or in the
+- Interactive planning runs pull request code on the same runner as its model key. A container escape
+  there, for example through a kernel bug, could leak that key: by default your main key. Save a
+  separate key as "Planning only", with a low spending limit, and mark the main one "Main only" to keep
+  it off that machine. An escape in planning or in the
   checks job could also replace the plan or the checks output, including the verdict that decides
   whether extra files are attached. That only changes what the review reads and which files publish
-  attaches, after publish's own checks. Keep a low spending limit on the planning key.
+  attaches, after publish's own checks.
 - With `before: pr-tools` the pull request's code records Before as well as After, so a hostile pull
   request can fake both.
 - Run logs in your tidy repository show the target repositories' content. Keep tidy private if it serves

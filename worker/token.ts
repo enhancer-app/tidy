@@ -1,16 +1,16 @@
 import { audienceFor, seal } from "../shared/seal";
 import { type Dispatch, type Env, type Instance, stateOf } from "./env";
 import { installationToken } from "./github";
+import { keyEntries, keysFor } from "./keys";
 import { loadInstance, resolveRepo } from "./instance";
 import { roleFor, verifyActionsToken } from "./oidc";
 import { loadSettings, ownerAllowed } from "./webhook";
 
 const WRITE_TOKENS_PER_RUN = 4;
 
-/** The model keys a role gets: planning never falls back to the agent's keys. */
-export function modelKeys(instance: Pick<Instance, "keys" | "planKeys">, role: "agent" | "plan"): Record<string, string> {
-  const keys = role === "agent" ? instance.keys : (instance.planKeys ?? {});
-  return Object.fromEntries(Object.entries(keys).map(([name, key]) => [name, key.value]));
+/** The model keys a role gets: keys for everything, plus the ones made for that role, which win. */
+export function modelKeys(instance: Pick<Instance, "keys" | "planKeys" | "modelKeys">, role: "agent" | "plan"): Record<string, string> {
+  return keysFor(keyEntries(instance), role);
 }
 
 const deny = (message: string, status = 403) => Response.json({ error: message }, { status });

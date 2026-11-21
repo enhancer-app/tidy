@@ -64,7 +64,7 @@ export type Role = "read" | "agent" | "plan" | "write";
 const ROLES: Record<string, Role> = {
   "gate.yml": "read",
   "agent.yml": "agent",
-  // Runs pull request code next to the model, so it only ever gets the separate planning key.
+  // Runs pull request code next to the model, so it never gets keys marked as main only.
   "plan.yml": "plan",
   "publish.yml": "write",
 };

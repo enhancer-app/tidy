@@ -4,6 +4,7 @@ import { type Env, type Instance, stateOf } from "./env";
 import { github, GitHubError, installationToken } from "./github";
 import { cookie, escape, isSameOrigin, page, readCookie } from "./html";
 import { loadInstance, resolveRepo, saveInstance } from "./instance";
+import { entriesFor, KEY_USES, type KeyEntry, keyEntries, type KeyUse } from "./keys";
 
 const SESSION = "__Host-tidy-session";
 const OAUTH = "__Host-tidy-oauth";
@@ -160,32 +161,53 @@ export async function isAdmin(env: Env, instance: Instance, login: string): Prom
   }
 }
 
-type KeyGroup = "agent" | "plan";
+const USE_LABELS: Record<KeyUse, string> = { all: "Everything", agent: "Main only", plan: "Planning only" };
+const USE_ACTIONS: Record<KeyUse, string> = { all: "Use for everything", agent: "Make main key", plan: "Make planning key" };
 
-function keyTable(keys: Instance["keys"], group: KeyGroup, csrf: string): string {
+function keyTable(entries: KeyEntry[], csrf: string): string {
   const labels = new Map(Object.values(PROVIDERS).map((p) => [p.env, p.label]));
-  const rows = Object.entries(keys)
-    .map(
-      ([name, key]) => `<tr><td><div>${escape(labels.get(name) ?? "Other")}</div><code class="var">${escape(name)}</code></td>
-<td>…${escape(key.value.slice(-4))}</td>
+  const hidden = (id: string) => `<input type="hidden" name="csrf" value="${escape(csrf)}"><input type="hidden" name="id" value="${escape(id)}">`;
+  const rows = entries
+    .map((key) => {
+      const switches = KEY_USES.filter((use) => use !== key.use)
+        .map((use) => `<button class="small" name="use" value="${use}">${USE_ACTIONS[use]}</button>`)
+        .join("");
+      return `<tr><td><div>${escape(labels.get(key.name) ?? "Other")}</div><code class="var">${escape(key.name)}</code></td>
+<td>…${escape(key.value.slice(-4))}</td><td>${USE_LABELS[key.use]}</td>
 <td class="muted">${escape(key.updated.slice(0, 16).replace("T", " "))} by @${escape(key.by)}</td>
-<td><form method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}"><input type="hidden" name="group" value="${group}">
-<input type="hidden" name="name" value="${escape(name)}"><button class="small danger" name="op" value="delete">Remove</button></form></td></tr>`,
-    )
+<td><form method="post" action="/admin/keys">${hidden(key.id)}<input type="hidden" name="op" value="use">${switches}</form>
+<form method="post" action="/admin/keys">${hidden(key.id)}<button class="small danger" name="op" value="delete">Remove</button></form></td></tr>`;
+    })
     .join("");
   const options = Object.entries(PROVIDERS)
-    .map(([id, p]) => `<option value="${id}">${escape(p.label)}${p.env in keys ? " · saved" : ""}</option>`)
+    .map(([id, p]) => `<option value="${id}">${escape(p.label)}${entries.some((e) => e.name === p.env) ? " · saved" : ""}</option>`)
     .join("");
-  return `<div class="table"><table><tr><th>Provider</th><th>Key</th><th>Changed</th><th></th></tr>${rows || '<tr><td colspan="4" class="muted">No keys yet.</td></tr>'}</table></div>
-<form class="stack" method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}"><input type="hidden" name="group" value="${group}">
+  const uses = KEY_USES.map((use) => `<option value="${use}">${USE_LABELS[use]}</option>`).join("");
+  return `<div class="table"><table><tr><th>Provider</th><th>Key</th><th>Use for</th><th>Changed</th><th></th></tr>${rows || '<tr><td colspan="5" class="muted">No keys yet.</td></tr>'}</table></div>
+<form class="stack" method="post" action="/admin/keys"><input type="hidden" name="csrf" value="${escape(csrf)}">
 <label>Provider<select name="provider">${options}<option value="other">Other (custom variable)</option></select></label>
 <label class="custom">Environment variable OpenCode reads<input type="text" name="name" placeholder="MY_PROVIDER_API_KEY" pattern="[A-Z][A-Z0-9_]{1,63}"></label>
 <label>Key<input type="password" name="value" autocomplete="off" required maxlength="4096"></label>
+<label>Use for<select name="use">${uses}</select></label>
 <div><button class="primary" name="op" value="set">Save key</button></div></form>`;
+}
+
+/** Which key each workflow gets, and a warning when interactive planning shares a key with everything else. */
+function effectiveKeys(entries: KeyEntry[]): string {
+  const list = (role: "agent" | "plan") =>
+    entriesFor(entries, role).map((e) => `<code class="var">${escape(e.name)}</code> …${escape(e.value.slice(-4))}`).join(", ") || "none";
+  const shared = entriesFor(entries, "plan").some((e) => e.use === "all");
+  const warning = shared
+    ? `<p><strong>Interactive extra planning uses a key you also use for everything else.</strong> It runs pull request code on the same
+machine as the model, so a container escape there could leak that key. For a separate key, save one as "Planning only" with a low
+spending limit at the provider, and make the other one "Main only".</p>`
+    : "";
+  return `<p class="muted">Reviews, issues and blind extra planning get: ${list("agent")}. Interactive extra planning gets: ${list("plan")}.</p>${warning}`;
 }
 
 async function dashboard(env: Env, instance: Instance, current: Session): Promise<Response> {
   const csrf = await mac(await deriveKeys(env.TIDY_MASTER_KEY), "csrf", current.sid);
+  const entries = keyEntries(instance);
   return page(
     "tidy admin",
     `<div class="bar"><p>Signed in as @${escape(current.login)}. App: <a href="https://github.com/apps/${escape(instance.app.slug)}">${escape(instance.app.slug)}</a>
@@ -193,37 +215,52 @@ async function dashboard(env: Env, instance: Instance, current: Session): Promis
 <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="${escape(csrf)}"><button class="small">Sign out</button></form></div>
 <section class="box"><h2>Model keys</h2><p class="muted">Keys can be replaced or removed, never shown. Every change opens an issue in
 <code>${escape(instance.repo.fullName)}</code>. Models are chosen in <code>tidy.yml</code>, not here.</p>
-${keyTable(instance.keys, "agent", csrf)}</section>
-<section class="box"><h2>Planning key</h2><p class="muted">Only for interactive review extras, which run pull request code on the
-same machine as the model. Use a separate key with a low spending limit at the provider, so a leak costs little.
-Without one, interactive extras are skipped.</p>
-${keyTable(instance.planKeys ?? {}, "plan", csrf)}</section>`,
+${effectiveKeys(entries)}
+${keyTable(entries, csrf)}</section>`,
     { app: instance.app.slug },
   );
 }
 
+const invalid = (title: string, text: string) => page(title, `<p>${text}</p>`, { status: 400 });
+
 async function updateKey(form: FormData, env: Env, instance: Instance, current: Session, origin: string): Promise<Response> {
   const op = form.get("op");
-  const name = keyName(op === "set" ? (form.get("provider") as string | null) : null, form.get("name") as string | null);
-  if (!name) return page("Invalid name", "<p>Use an environment variable name such as OPENCODE_API_KEY.</p>", { status: 400 });
-  const plan = form.get("group") === "plan";
-  const keys = plan ? (instance.planKeys ??= {}) : instance.keys;
+  const entries = keyEntries(instance);
+  const use = form.get("use");
+  if (op !== "delete" && !KEY_USES.includes(use as KeyUse)) return invalid("Invalid request", "Choose what the key is for.");
+  let title: string;
   if (op === "set") {
+    const name = keyName(form.get("provider") as string | null, form.get("name") as string | null);
+    if (!name) return invalid("Invalid name", "Use an environment variable name such as OPENCODE_API_KEY.");
     const value = String(form.get("value") ?? "").trim();
-    if (!value || value.length > 4096 || /\s/.test(value)) return page("Invalid key", "<p>The key is empty or malformed.</p>", { status: 400 });
-    const other = plan ? instance.keys : (instance.planKeys ?? {});
-    // The same key in both groups would hand plan.yml the agent's key and undo the separation.
-    if (Object.values(other).some((key) => key.value === value)) {
-      return page("Key already in use", "<p>This key is already saved in the other group. Use a separate key for planning.</p>", { status: 400 });
+    if (!value || value.length > 4096 || /\s/.test(value)) return invalid("Invalid key", "The key is empty or malformed.");
+    const replaced = entries.find((e) => e.name === name && e.use === use);
+    // The same key under two uses would give interactive planning a key marked as main only.
+    if (entries.some((e) => e !== replaced && e.value === value)) return invalid("Key already in use", "This key is already saved. Each saved key must be different.");
+    const entry: KeyEntry = { id: replaced?.id ?? crypto.randomUUID(), name, value, use: use as KeyUse, updated: new Date().toISOString(), by: current.login };
+    instance.modelKeys = replaced ? entries.map((e) => (e === replaced ? entry : e)) : [...entries, entry];
+    title = `Set model key ${name} for ${USE_LABELS[entry.use].toLowerCase()}`;
+  } else if (op === "delete" || op === "use") {
+    const entry = entries.find((e) => e.id === form.get("id"));
+    if (!entry) return invalid("Key not found", "Reload the page and try again.");
+    if (op === "delete") {
+      instance.modelKeys = entries.filter((e) => e !== entry);
+      title = `Removed model key ${entry.name} (${USE_LABELS[entry.use].toLowerCase()})`;
+    } else {
+      if (entries.some((e) => e !== entry && e.name === entry.name && e.use === use)) {
+        return invalid("Use already taken", `Another ${escape(entry.name)} key is already saved for ${USE_LABELS[use as KeyUse].toLowerCase()}.`);
+      }
+      instance.modelKeys = entries.map((e) => (e === entry ? { ...e, use: use as KeyUse, updated: new Date().toISOString(), by: current.login } : e));
+      title = `Changed model key ${entry.name} from ${USE_LABELS[entry.use].toLowerCase()} to ${USE_LABELS[use as KeyUse].toLowerCase()}`;
     }
-    keys[name] = { value, updated: new Date().toISOString(), by: current.login };
-  } else if (op === "delete") {
-    delete keys[name];
   } else {
-    return page("Invalid request", "", { status: 400 });
+    return invalid("Invalid request", "");
   }
+  // The entries replace the older maps, so they are not read twice.
+  instance.keys = {};
+  delete instance.planKeys;
   await saveInstance(env, instance);
-  await audit(env, instance, `${op === "set" ? "Set" : "Removed"} ${plan ? "planning" : "model"} key ${name}`, current.login);
+  await audit(env, instance, title, current.login);
   return Response.redirect(`${origin}/admin`, 303);
 }
 

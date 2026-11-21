@@ -93,12 +93,13 @@ Your tool needs `bash` and `timeout` in the image. Steps run without a network u
 steps, so start long-running ones with `start`. Steps that wait for a condition, such as an `expect`
 that blocks until text appears, replay better than fixed pauses.
 
-Interactive extras need a **planning key** in `/admin`, separate from the model keys; `/admin` refuses
-a key that is already saved as a model key. The live container runs pull request code on the same
-machine as the model, so a container escape could leak the planning key. The model keys never reach
-that machine. Give the planning key a low spending limit at the provider, and make it a key for the
-provider of `review.model`, which plans the extras. Without one, every extra of a pull request that
-matches an interactive extra is skipped, the plain ones too, because they are planned together.
+Interactive extras plan with the model keys in `/admin` that are for **everything** (the default) or
+**planning only**, for the provider of `review.model`. The live container runs pull request code on the
+same machine as the model, so a container escape could leak that key. To keep your main key off that
+machine, save a second key as "Planning only" with a low spending limit at the provider, and make the
+main one "Main only"; `/admin` shows which keys each workflow gets. Without a usable key, every extra of
+a pull request that matches an interactive extra is skipped, the plain ones too, because they are
+planned together.
 A step that fails because its container stopped, for example after running out of memory, counts as
 a broken run, not as a failed check.
 

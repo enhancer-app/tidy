@@ -23,7 +23,7 @@ Worker checks which workflow file the job runs and hands out:
 | --- | --- |
 | `gate.yml` | a read-only token for the target repository |
 | `agent.yml` | the model keys, and no GitHub token |
-| `plan.yml` | only the planning key, for [interactive extras](extras.md#interactive-extras) |
+| `plan.yml` | the model keys marked for everything or for planning, for [interactive extras](extras.md#interactive-extras) |
 | `publish.yml` | a token that can push a new branch and comment, for one repository, a few times per run |
 | `checks.yml` | nothing |
 
