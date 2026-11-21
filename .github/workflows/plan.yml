@@ -1,0 +1,50 @@
+name: tidy plan
+
+# Plans interactive review extras. The model drives live containers with pull request code on this
+# runner, so the Worker gives this file only keys marked for everything or for planning in /admin.
+on:
+  workflow_call:
+    inputs:
+      model:
+        type: string
+        required: true
+      context-artifact:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tidy
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ inputs.context-artifact }}
+          path: ${{ runner.temp }}
+      - run: tar -xf "$RUNNER_TEMP/context.tar" -C "$RUNNER_TEMP"
+      - id: agent
+        env:
+          TIDY_ROOT: tidy
+          TASK: plan
+          LIVE: "true"
+          MODEL: ${{ inputs.model }}
+        run: bun tidy/scripts/agent.ts
+      - if: steps.agent.outputs.plan == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plan
+          path: ${{ runner.temp }}/plan
+          retention-days: 7
+          overwrite: true

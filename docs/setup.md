@@ -16,7 +16,8 @@ You need a GitHub account, a free Cloudflare account and a model key, for exampl
    sure your tidy repository is included.
 5. Open `https://<your-worker>/admin`, sign in with GitHub, pick your model provider, for example
    OpenCode Zen / Go, and save its key. You can save keys for several providers. For a provider not in
-   the list, pick **Other** and enter the variable OpenCode reads for it.
+   the list, pick **Other** and enter the variable OpenCode reads for it. A key is used for everything by default;
+   see [interactive extras](extras.md#interactive-extras) for a separate, cheaper key for planning.
 
 Every key change in `/admin` opens an issue in your tidy repository, so a change you did not make does
 not go unnoticed. You can close those issues.
@@ -103,3 +104,7 @@ such as `name` in `wrangler.jsonc` or your `tidy.yml`, then commit. Later update
 git pull upstream main
 bun run deploy
 ```
+
+An update can need a new webhook event, which GitHub does not add to an existing App. For
+[thread replies](how-it-works.md#replies-in-review-threads), open your App's settings on GitHub, go to
+**Permissions & events**, and under **Subscribe to events** tick **Pull request review comment**.

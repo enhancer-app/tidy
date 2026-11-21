@@ -69,6 +69,8 @@ describe("roleFor", () => {
     expect(roleFor(claims({ job_workflow_ref: ref("publish.yml") }), repo)).toBe("write");
     expect(roleFor(claims({ job_workflow_ref: ref("agent.yml") }), repo)).toBe("agent");
     expect(roleFor(claims({ job_workflow_ref: ref("gate.yml") }), repo)).toBe("read");
+    // Live planning runs pull request code beside the model, so it must not get the agent's keys.
+    expect(roleFor(claims({ job_workflow_ref: ref("plan.yml") }), repo)).toBe("plan");
   });
 
   test("the agent and checks workflows cannot pose as the publisher", () => {

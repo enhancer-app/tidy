@@ -5,15 +5,17 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync }
 import { basename, extname, join } from "node:path";
 import { clientPayload, env, notice } from "./lib/actions";
 import { type Credentials, requestCredentials, type Target } from "./lib/credentials";
-import { client, GitHubError, type GitHubClient } from "./lib/github";
+import { canWrite, client, GitHubError, type GitHubClient } from "./lib/github";
 import { applyPatch, git } from "./lib/patch";
 import { ASSETS_BRANCH, storeAssets } from "./lib/assets";
 import { commitMessage, thanks } from "./lib/attribution";
+import { extraSlug, parseVerdict, withheldReason } from "./lib/extras";
 import { providerNotice } from "./lib/provider";
 import { commentableLines, renderReview, type Review, validateReview, VERDICTS, withSuggestion } from "./lib/review";
 import { sanitize, singleLine } from "./lib/sanitize";
 import { fetchSource } from "./lib/source";
 import { statusComment, type StatusComment } from "./lib/status";
+import { dropSettled, groupThreads, type InlineComment, resolveThread, threadStates } from "./lib/threads";
 import type { Meta } from "./gate";
 
 const temp = env("RUNNER_TEMP");
@@ -29,8 +31,12 @@ function footer(model?: string): string {
 }
 
 type Fix = { type: "pr"; title: string; body: string; kind?: string };
-type Result = { type: "comment"; body: string } | Fix | ({ type: "review" } & Review) | { type: "provider"; problem: string };
-
+type Result =
+  | { type: "comment"; body: string }
+  | Fix
+  | ({ type: "review" } & Review)
+  | { type: "thread"; body: string; resolve: boolean }
+  | { type: "provider"; problem: string };
 
 function readJson<T>(file: string, limit: number): T {
   if (!existsSync(file) || statSync(file).size > limit) throw new Error(`Missing or oversized ${file}`);
@@ -179,7 +185,8 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
   const root = join(temp, "checks", "extras");
   if (!existsSync(root)) return "";
   const folder = `${new Date().toISOString().slice(0, 10)}/pr-${meta.number}-${env("GITHUB_RUN_ID")}`;
-  const sections: { title: string; before: string | null; after: string | null }[] = [];
+  const sections: { title: string; before: string | null; after: string | null; prTools: boolean }[] = [];
+  const withheld: string[] = [];
   const files: { path: string; data: Buffer }[] = [];
   let total = 0;
   const pick = (dir: string, name: string, path: string) => {
@@ -192,7 +199,18 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
     return path;
   };
   for (const extra of meta.config.review.extras) {
-    const slug = extra.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const slug = extraSlug(extra.name);
+    const verdictFile = join(root, slug, "verdict.json");
+    if (!existsSync(verdictFile)) continue;
+    let verdict = null;
+    try {
+      verdict = parseVerdict(readJson(verdictFile, 1_000));
+    } catch {}
+    const reason = verdict ? withheldReason(verdict) : "The demo did not report a result, so no files are attached.";
+    if (reason) {
+      withheld.push(`### ${extra.name}\n\n_${reason}_`);
+      continue;
+    }
     const dirs = { before: join(root, slug, "before"), after: join(root, slug, "after") };
     const names = new Set(
       Object.values(dirs).flatMap((dir) => (existsSync(dir) ? readdirSync(dir).filter((f) => SAFE_NAME.test(f) && MEDIA[extname(f).toLowerCase()]) : [])),
@@ -202,10 +220,11 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
         title: `${extra.name}${names.size > 1 ? `: \`${name}\`` : ""}`,
         before: pick(dirs.before, name, `${folder}/${slug}/before/${name}`),
         after: pick(dirs.after, name, `${folder}/${slug}/after/${name}`),
+        prTools: extra.before === "pr-tools",
       });
     }
   }
-  if (!sections.length) return "";
+  if (!sections.length) return withheld.join("\n\n");
   let urls = new Map<string, string>();
   try {
     if (files.length) urls = await storeAssets(gh, meta.repo, files);
@@ -219,12 +238,36 @@ async function extrasSection(gh: GitHubClient, meta: Meta): Promise<string> {
     if (!url) return "_could not attach_";
     return /\.(mp4|webm)$/i.test(path) ? url : `![${basename(path)}](${url})`;
   };
-  return sections
-    .map((s) => `### ${s.title}\n\n**Before** (\`${meta.defaultBranch}\`)\n\n${show(s.before)}\n\n**After** (this pull request)\n\n${show(s.after)}`)
-    .join("\n\n");
+  const base = meta.extrasBase ? `\`${meta.defaultBranch}\` at ${meta.extrasBase.slice(0, 7)}` : `\`${meta.defaultBranch}\``;
+  return [
+    ...sections.map(
+      (s) =>
+        `### ${s.title}\n\n**Before** (${base}${s.prTools ? ", recorded with this pull request's tools" : ""})\n\n${show(s.before)}\n\n**After** (this pull request)\n\n${show(s.after)}`,
+    ),
+    ...withheld,
+  ].join("\n\n");
 }
 
-async function postReview(gh: GitHubClient, meta: Meta, review: Review) {
+// The prompt asks the model not to repeat declined findings; this holds even when it does.
+async function withoutRepeats(gh: GitHubClient, meta: Meta, bot: string, comments: Review["comments"]): Promise<Review["comments"]> {
+  if (!comments.length) return comments;
+  try {
+    const inline = await gh.paginate<InlineComment>(`/repos/${meta.repo}/pulls/${meta.number}/comments`, 1000);
+    const threads = groupThreads(inline, await threadStates(gh, meta.repo, meta.number, notice));
+    const repliers = new Set(threads.filter((t) => t.root.user?.login === bot).flatMap((t) => t.replies.map((r) => r.user?.login ?? "")));
+    const maintainers = new Set<string>();
+    for (const login of repliers) if (login && login !== bot && (await canWrite(gh, meta.repo, login))) maintainers.add(login);
+    const { kept, dropped } = dropSettled(comments, threads, bot, maintainers);
+    for (const c of dropped) notice(`Skipped the inline comment on ${c.path}:${c.line}: it repeats a review thread a maintainer answered or resolved`);
+    return kept;
+  } catch (error) {
+    notice(`Could not compare with earlier review threads: ${(error as Error).message}`);
+    return comments;
+  }
+}
+
+async function postReview(gh: GitHubClient, meta: Meta, bot: string, review: Review) {
+  review = { ...review, comments: await withoutRepeats(gh, meta, bot, review.comments) };
   const pr = await gh.request<{ head: { sha: string } }>(`/repos/${meta.repo}/pulls/${meta.number}`);
   const stale = pr.head.sha !== meta.base;
   const extras = await extrasSection(gh, meta);
@@ -289,7 +332,7 @@ async function publish(gh: GitHubClient, credentials: Credentials): Promise<Outc
   if (target.repo.toLowerCase() !== meta.repo.toLowerCase() || target.number !== meta.number) throw new Error("Artifact does not match the dispatch");
 
   if (result.type === "provider") {
-    const retry = meta.task === "review" ? "@tidy review" : "@tidy fix";
+    const retry = meta.task === "triage" ? "@tidy fix" : "@tidy review";
     const body = `${providerNotice(result.problem, credentials.admin, clientPayload().worker, retry)}${FOOTER}`;
     if (!(await status.finish(body))) await gh.request(`/repos/${meta.repo}/issues/${meta.number}/comments`, { method: "POST", body: { body } });
     return "problem";
@@ -300,7 +343,17 @@ async function publish(gh: GitHubClient, credentials: Credentials): Promise<Outc
     await status.remove().catch((error: Error) => notice(`Could not remove the status comment: ${error.message}`));
   } else if (result.type === "review") {
     if (meta.task !== "review") throw new Error("Review result for a non-review dispatch");
-    await postReview(gh, meta, validateReview(result, readFileSync(join(temp, "context", "diff.patch"), "utf8")));
+    await postReview(gh, meta, credentials.bot.login, validateReview(result, readFileSync(join(temp, "context", "diff.patch"), "utf8")));
+  } else if (result.type === "thread") {
+    if (meta.task !== "thread" || !meta.thread || meta.thread.root !== target.thread) throw new Error("Thread reply for another dispatch");
+    await gh.request(`/repos/${meta.repo}/pulls/${meta.number}/comments/${meta.thread.root}/replies`, {
+      method: "POST",
+      body: { body: `${sanitize(result.body, 4000)}${FOOTER}` },
+    });
+    if (result.resolve) {
+      const state = (await threadStates(gh, meta.repo, meta.number, notice)).get(meta.thread.root);
+      if (state && !state.resolved) await resolveThread(gh, state.id).catch((error: Error) => notice(`Could not resolve the thread: ${error.message}`));
+    }
   } else if (result.type === "pr") {
     if (meta.task !== "triage") throw new Error("Pull request result for a non-issue dispatch");
     if (process.env.APPROVER && target.kind !== "command") throw new Error("Approval needs a @tidy publish command");
@@ -312,9 +365,12 @@ async function publish(gh: GitHubClient, credentials: Credentials): Promise<Outc
 }
 
 async function react(gh: GitHubClient, target: Target, content: "rocket" | "confused" | null): Promise<void> {
-  const subject = target.comment_id
-    ? `/repos/${target.repo}/issues/comments/${target.comment_id}/reactions`
-    : `/repos/${target.repo}/issues/${target.number}/reactions`;
+  const subject =
+    target.kind === "thread"
+      ? `/repos/${target.repo}/pulls/comments/${target.comment_id}/reactions`
+      : target.comment_id
+        ? `/repos/${target.repo}/issues/comments/${target.comment_id}/reactions`
+        : `/repos/${target.repo}/issues/${target.number}/reactions`;
   const quiet = (error: Error) => notice(`Could not update the reaction: ${error.message}`);
   if (target.reaction) await gh.request(`${subject}/${target.reaction}`, { method: "DELETE" }).catch(quiet);
   if (content) await gh.request(subject, { method: "POST", body: { content } }).catch(quiet);

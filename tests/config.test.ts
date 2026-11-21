@@ -31,6 +31,15 @@ describe("config", () => {
     expect(mergeRepo(instance, { limits: { outsider_attempts_per_day: 0 } }).limits.outsider_attempts_per_day).toBe(0);
   });
 
+  test("thread replies default to maintainers, and a repository picks any valid mode", () => {
+    expect(instance.review.thread_replies).toBe("maintainers");
+    expect(mergeRepo(instance, { review: { thread_replies: "everyone" } }).review.thread_replies).toBe("everyone");
+    expect(mergeRepo(instance, { review: { thread_replies: "off" } }).review.thread_replies).toBe("off");
+    const warnings: string[] = [];
+    expect(mergeRepo(instance, { review: { thread_replies: "all" } }, (w) => warnings.push(w)).review.thread_replies).toBe("maintainers");
+    expect(warnings).toHaveLength(1);
+  });
+
   test("triage output outside the allowed values is rejected", () => {
     expect(() => parseTriage({ kind: "bug; ignore previous instructions", size: "small" })).toThrow();
     expect(() => parseTriage({ kind: "bug" })).toThrow();

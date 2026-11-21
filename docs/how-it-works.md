@@ -6,9 +6,10 @@ receives GitHub webhooks and holds the keys. The agent is [OpenCode](https://ope
 ```text
 GitHub event ──▶ Worker ──repository_dispatch──▶ tidy workflows in your tidy repository
 (issue, PR,       checks the signature,           gate     reads the thread, decides trust, snapshots the code
- @tidy comment)   holds the App key and           issue    triage, then a fix or reply, in one job
-                  model keys, applies the         plan     picks arguments for review extras
+ @tidy comment,   holds the App key and           issue    triage, then a fix or reply, in one job
+ review reply)    model keys, applies the         plan     picks arguments for review extras
                   run limits                      review   OpenCode in a container
+                                                  thread   answers a reply to an inline comment
                       │                           checks   your repo's tests, no credentials at all
                       └── per-job credentials ─── publish  the only job with write access
 ```
@@ -22,6 +23,7 @@ Worker checks which workflow file the job runs and hands out:
 | --- | --- |
 | `gate.yml` | a read-only token for the target repository |
 | `agent.yml` | the model keys, and no GitHub token |
+| `plan.yml` | the model keys marked for everything or for planning, for [interactive extras](extras.md#interactive-extras) |
 | `publish.yml` | a token that can push a new branch and comment, for one repository, a few times per run |
 | `checks.yml` | nothing |
 
@@ -64,6 +66,24 @@ open. A push during a review cancels it, so a burst of commits gets one review. 
 someone without write access gets at most `review.max_auto_reviews` automatic reviews, and at most
 `limits.outsider_pushes_per_pr_per_day` follow-ups a day; after that a maintainer can comment
 `@tidy review`. Maintainers' pull requests have no such caps.
+
+Every review reads the inline review threads too: tidy's earlier comments, the replies to them, and
+whether each thread is resolved. If a maintainer declined a finding with a reason, or resolved its
+thread, tidy does not raise it again unless new code changes the situation. As a backstop, tidy never
+posts a new inline comment on the same file near such a thread, or with the same suggestion; the
+finding can still appear as one line in the review.
+
+## Replies in review threads
+
+When someone replies to one of tidy's inline comments, tidy answers in the same thread. It reads the
+thread, the code at the pull request's latest commit and the diff. Then it either concedes, and resolves
+the thread, or explains once, briefly, why the comment still holds. A reply such as thanks gets no
+answer. tidy does not push, run checks or post a new review for a reply.
+
+[`review.thread_replies`](configuration.md#reviews) decides whose replies count: `maintainers` (the
+default), `everyone`, or `off`. Replies from people without write access count towards their
+`limits.outsider_events_per_day`. tidy answers at most twice per thread, never in a resolved thread,
+and never in threads someone else started.
 
 ## Commands
 

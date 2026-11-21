@@ -1,11 +1,17 @@
 import { audienceFor, seal } from "../shared/seal";
-import { type Dispatch, type Env, stateOf } from "./env";
+import { type Dispatch, type Env, type Instance, stateOf } from "./env";
 import { installationToken } from "./github";
+import { keyEntries, keysFor } from "./keys";
 import { loadInstance, resolveRepo } from "./instance";
 import { roleFor, verifyActionsToken } from "./oidc";
 import { loadSettings, ownerAllowed } from "./webhook";
 
 const WRITE_TOKENS_PER_RUN = 4;
+
+/** The model keys a role gets: keys for everything, plus the ones made for that role, which win. */
+export function modelKeys(instance: Pick<Instance, "keys" | "planKeys" | "modelKeys">, role: "agent" | "plan"): Record<string, string> {
+  return keysFor(keyEntries(instance), role);
+}
 
 const deny = (message: string, status = 403) => Response.json({ error: message }, { status });
 
@@ -38,10 +44,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   const settings = await loadSettings(instance, repo);
   if (!ownerAllowed(dispatch.repo.split("/")[0]!, settings.access, instance.app.ownerLogin)) return deny("owner not in allowed_owners");
 
-  const target = { kind: dispatch.kind, repo: dispatch.repo, number: dispatch.number, comment_id: dispatch.commentId, reaction: dispatch.reaction, follow_up: dispatch.followUp, requested: dispatch.requested };
+  const target = { kind: dispatch.kind, repo: dispatch.repo, number: dispatch.number, comment_id: dispatch.commentId, thread: dispatch.thread, reaction: dispatch.reaction, follow_up: dispatch.followUp, requested: dispatch.requested };
   let credentials: Record<string, unknown>;
-  if (role === "agent") {
-    credentials = { keys: Object.fromEntries(Object.entries(instance.keys).map(([name, key]) => [name, key.value])) };
+  if (role === "agent" || role === "plan") {
+    credentials = { keys: modelKeys(instance, role) };
   } else {
     const token = await installationToken(
       instance.app,

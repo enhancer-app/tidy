@@ -1,3 +1,5 @@
+import { THREAD_REPLIES, type ThreadReplies, threadReplies } from "../../shared/replies";
+
 export const KINDS = ["bug", "feature", "docs", "question", "spam", "security"] as const;
 export const SIZES = ["small", "medium", "large"] as const;
 export const ACTIONS = ["fix", "reply", "ignore", "security-notice"] as const;
@@ -21,7 +23,21 @@ export interface Extra {
   instructions: string;
   image: string;
   setup: string;
+  /** Empty for interactive extras, which run their steps instead. */
   command: string[];
+  /** "pr-tools" runs Before with the pull request's tools and the base code mounted at /base. */
+  before: "base" | "pr-tools";
+  interactive?: Interactive;
+}
+
+/** Lets the planning model try the repository's own tool in a live container before tidy records anything. */
+export interface Interactive {
+  /** Started in the background before the first step, such as the app under test. */
+  start: string[];
+  /** The only commands the model can run: a name, and the command its arguments are appended to. */
+  steps: Record<string, string[]>;
+  /** Steps run without a network unless the repository turns it on. */
+  network: boolean;
 }
 
 export interface Config {
@@ -29,7 +45,7 @@ export interface Config {
   models: { allowed: string[] };
   triage: { model: string };
   routes: Route[];
-  review: { model: string; checks: string[]; image: string; extras: Extra[]; on_push: boolean; max_auto_reviews: number };
+  review: { model: string; checks: string[]; image: string; extras: Extra[]; on_push: boolean; max_auto_reviews: number; thread_replies: ThreadReplies };
   agent: { opencode: string; image: string; timeout_minutes: number };
   limits: { outsider_attempts_per_day: number };
   protected_paths: string[];
@@ -79,23 +95,42 @@ function parseExtras(value: unknown): Extra[] {
   };
   return value.map((raw, index) => {
     const extra = raw as Record<string, unknown>;
+    const args = (v: unknown, field: string): string[] => {
+      if (!Array.isArray(v) || !v.length || v.length > 50 || !v.every((a) => typeof a === "string" && a.length < 500)) {
+        throw new Error(`review.extras[${index}].${field} must be a list of arguments`);
+      }
+      return v;
+    };
     const name = text(extra.name, "name", 40);
     if (!/^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(name)) throw new Error(`review.extras[${index}].name may use letters, digits, spaces, - and _`);
     const when = extra.when === undefined ? ["**"] : extra.when;
-    const command = extra.command;
     if (!Array.isArray(when) || !when.every((g) => typeof g === "string" && g.length < 200)) throw new Error(`review.extras[${index}].when must be a list of globs`);
-    if (!Array.isArray(command) || !command.length || command.length > 50 || !command.every((a) => typeof a === "string" && a.length < 500)) {
-      throw new Error(`review.extras[${index}].command must be a list of arguments`);
-    }
     const image = extra.image === undefined ? "node:22-bookworm" : text(extra.image, "image", 200);
     if (!IMAGE.test(image)) throw new Error(`review.extras[${index}].image is not a valid image reference`);
+    const before = extra.before ?? "base";
+    if (before !== "base" && before !== "pr-tools") throw new Error(`review.extras[${index}].before must be base or pr-tools`);
+    let interactive: Interactive | undefined;
+    if (extra.interactive !== undefined) {
+      const raw = (extra.interactive ?? {}) as { start?: unknown; steps?: unknown; network?: unknown };
+      const steps = Object.entries(raw.steps && typeof raw.steps === "object" ? raw.steps : {});
+      if (!steps.length || steps.length > 20 || !steps.every(([verb]) => /^[a-z][a-z0-9-]{0,30}$/.test(verb))) {
+        throw new Error(`review.extras[${index}].interactive.steps must map up to 20 lowercase names to commands`);
+      }
+      interactive = {
+        start: raw.start === undefined ? [] : args(raw.start, "interactive.start"),
+        steps: Object.fromEntries(steps.map(([verb, command]) => [verb, args(command, `interactive.steps.${verb}`)])),
+        network: raw.network === true,
+      };
+    }
     return {
       name,
       when: when as string[],
       instructions: text(extra.instructions ?? "", "instructions", 4000),
       image,
       setup: text(extra.setup ?? "", "setup", 4000),
-      command: command as string[],
+      command: interactive && extra.command === undefined ? [] : args(extra.command, "command"),
+      before,
+      ...(interactive ? { interactive } : {}),
     };
   });
 }
@@ -117,7 +152,8 @@ export function parseInstance(raw: unknown): Config {
     triage: { model: c.triage?.model },
     routes: parseRoutes(c.routes ?? []),
     review: { model: c.review?.model, checks: c.review?.checks ?? [], image: c.review?.image ?? "node:22-bookworm", extras: [],
-      on_push: c.review?.on_push !== false, max_auto_reviews: c.review?.max_auto_reviews ?? 5 },
+      on_push: c.review?.on_push !== false, max_auto_reviews: c.review?.max_auto_reviews ?? 5,
+      thread_replies: threadReplies(c.review?.thread_replies) ?? "maintainers" },
     agent: { opencode: c.agent?.opencode, image: c.agent?.image ?? "node:22-bookworm", timeout_minutes: c.agent?.timeout_minutes ?? 30 },
     limits: { outsider_attempts_per_day: c.limits?.outsider_attempts_per_day ?? 2 },
     protected_paths: c.protected_paths ?? [],
@@ -146,6 +182,12 @@ export function mergeRepo(instance: Config, raw: unknown, warn: (message: string
     warn(`${field} ${String(value)} is not allowed by this tidy instance; using ${fallback}`);
     return fallback;
   };
+  const replies = (value: unknown) => {
+    if (value === undefined) return instance.review.thread_replies;
+    const mode = threadReplies(value);
+    if (!mode) warn(`review.thread_replies must be one of ${THREAD_REPLIES.join(", ")}; using ${instance.review.thread_replies}`);
+    return mode ?? instance.review.thread_replies;
+  };
   const routes = repo.routes === undefined ? instance.routes : parseRoutes(repo.routes);
   const checks = repo.review?.checks;
   if (checks !== undefined && !(Array.isArray(checks) && checks.every((c) => typeof c === "string" && c.length < 500))) {
@@ -171,6 +213,7 @@ export function mergeRepo(instance: Config, raw: unknown, warn: (message: string
         typeof repo.review?.max_auto_reviews === "number" && repo.review.max_auto_reviews >= 0
           ? Math.min(repo.review.max_auto_reviews, instance.review.max_auto_reviews)
           : instance.review.max_auto_reviews,
+      thread_replies: replies(repo.review?.thread_replies),
     },
     protected_paths: [
       ...instance.protected_paths,

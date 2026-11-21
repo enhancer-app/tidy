@@ -1,3 +1,4 @@
+import type { KeyEntry } from "./keys";
 import type { TidyState } from "./state";
 
 export interface Env {
@@ -28,17 +29,24 @@ export interface RepoRecord {
 export interface Instance {
   app: AppRecord;
   repo: RepoRecord;
-  /** Model credentials, keyed by the environment variable OpenCode reads. */
+  /** Model credentials, each marked with what it is for. Replaces `keys` and `planKeys` on the next save. */
+  modelKeys?: KeyEntry[];
+  /** The older format: model credentials keyed by the environment variable OpenCode reads. */
   keys: Record<string, { value: string; updated: string; by: string }>;
+  /** The older format's keys for interactive extra planning only. */
+  planKeys?: Record<string, { value: string; updated: string; by: string }>;
 }
 
 export interface Dispatch {
-  kind: "issue" | "review" | "command";
+  kind: "issue" | "review" | "command" | "thread";
   repo: string;
   repoId: number;
   installationId: number;
   number: number;
+  /** An issue comment for commands, or an inline review reply for threads. */
   commentId?: number;
+  /** First comment of the review thread a reply belongs to. */
+  thread?: number;
   /** Set for new commits on an open pull request. */
   followUp?: boolean;
   /** A maintainer asked for this review with the tidy:review label. */

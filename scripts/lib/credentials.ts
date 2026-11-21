@@ -2,10 +2,12 @@ import { audienceFor, createRecipient, open, type Sealed } from "../../shared/se
 import { clientPayload, env, mask } from "./actions";
 
 export interface Target {
-  kind: "issue" | "review" | "command";
+  kind: "issue" | "review" | "command" | "thread";
   repo: string;
   number: number;
   comment_id?: number;
+  /** First comment of the review thread a reply to tidy belongs to. */
+  thread?: number;
   /** The 👀 reaction the Worker added when the event arrived. */
   reaction?: number;
   follow_up?: boolean;
@@ -14,7 +16,7 @@ export interface Target {
 }
 
 export interface Credentials {
-  role: "read" | "agent" | "write";
+  role: "read" | "agent" | "plan" | "write";
   target: Target;
   bot: { login: string };
   /** The tidy instance's owner, pinged when the model provider refuses tidy's key. */
