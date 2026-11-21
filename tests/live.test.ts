@@ -71,6 +71,9 @@ describe("bridge", () => {
     const bridge = new Bridge([{ extra: extra(), session }], { KEY });
     expect(await bridge.call("step", { extra: "Demo", verb: "rec-start", args: ["--fps", "10"] })).toEqual({ text: "exit code 0\nok", isError: false });
     expect(commands).toEqual([["bun", "run", "tui", "rec", "start", "--out", "/out/demo.gif", "--fps", "10"]]);
+    // Models repeat the --out they see in the step list; it must still land in /out.
+    await bridge.call("step", { extra: "Demo", verb: "rec-start", args: ["--out", "{out}/demo.gif"] });
+    expect(commands[1]?.slice(-2)).toEqual(["--out", "/out/demo.gif"]);
   });
 
   test("refuses undeclared steps, unknown extras and unknown tools without running anything", async () => {
